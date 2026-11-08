@@ -33,21 +33,10 @@ func TestShopperSeesSeededFlashSales(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	res, err := http.Get(config.Env("API_URL", "http://localhost:8080") + "/api/flash-sales")
-	if err != nil {
-		t.Fatalf("list flash sales: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", res.StatusCode)
-	}
-	var body gen.ListFlashSales200JSONResponse
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
+	flashSales := listFlashSales(t)
 
 	stores := map[string]bool{}
-	for _, flashSale := range body.FlashSales {
+	for _, flashSale := range flashSales {
 		stores[flashSale.Store.Name] = true
 	}
 	if len(stores) < 3 {
@@ -56,7 +45,7 @@ func TestShopperSeesSeededFlashSales(t *testing.T) {
 
 	// A known seeded Flash Sale, checked field by field.
 	var found bool
-	for _, flashSale := range body.FlashSales {
+	for _, flashSale := range flashSales {
 		if flashSale.ProductName != "Aurora Trail Runner" {
 			continue
 		}
@@ -72,11 +61,11 @@ func TestShopperSeesSeededFlashSales(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("seeded Flash Sale %q not listed; got %d Flash Sales", "Aurora Trail Runner", len(body.FlashSales))
+		t.Fatalf("seeded Flash Sale %q not listed; got %d Flash Sales", "Aurora Trail Runner", len(flashSales))
 	}
 
-	for i := 1; i < len(body.FlashSales); i++ {
-		if body.FlashSales[i].StartsAt.Before(body.FlashSales[i-1].StartsAt) {
+	for i := 1; i < len(flashSales); i++ {
+		if flashSales[i].StartsAt.Before(flashSales[i-1].StartsAt) {
 			t.Errorf("Flash Sales not ordered by start time at index %d", i)
 		}
 	}

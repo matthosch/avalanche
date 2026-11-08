@@ -4,6 +4,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -16,7 +17,12 @@ import (
 //
 // It is safe to run repeatedly or concurrently. Stock is loaded before the status changes,
 // so a LIVE Flash Sale always has inventory in Redis; if a pass dies in between, the next one
-// repeats Load, which keeps the stock from the first.
+// repeats Load, which keeps the stock from the first. A Flash Sale whose whole window passed
+// while no worker ran still goes through LIVE (with its stock loaded) on its way to ENDED, so
+// every ended Flash Sale reaches Close-out the same way.
+//
+// A Flash Sale that fails to go LIVE is retried on the next pass; it doesn't stop the others
+// from going LIVE, or LIVE ones from ending.
 func Advance(ctx context.Context, db commerce.Querier, inv *inventory.Inventory) error {
 	now, err := inv.Now(ctx)
 	if err != nil {
@@ -26,16 +32,25 @@ func Advance(ctx context.Context, db commerce.Querier, inv *inventory.Inventory)
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, flashSale := range due {
-		if err := inv.Load(ctx, flashSale.ID, flashSale.Units); err != nil {
-			return err
+		if err := goLive(ctx, db, inv, flashSale); err != nil {
+			errs = append(errs, err)
 		}
-		if err := commerce.MarkLive(ctx, db, flashSale.ID); err != nil {
-			return err
-		}
-		slog.InfoContext(ctx, "flash sale live", "flash_sale_id", flashSale.ID, "units", flashSale.Units)
 	}
-	return commerce.EndDue(ctx, db, now)
+	errs = append(errs, commerce.EndDue(ctx, db, now))
+	return errors.Join(errs...)
+}
+
+func goLive(ctx context.Context, db commerce.Querier, inv *inventory.Inventory, flashSale commerce.DueToGoLive) error {
+	if err := inv.Load(ctx, flashSale.ID, flashSale.Units); err != nil {
+		return err
+	}
+	if err := commerce.MarkLive(ctx, db, flashSale.ID); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "flash sale live", "flash_sale_id", flashSale.ID, "units", flashSale.Units)
+	return nil
 }
 
 // Run calls Advance every interval until ctx is done. A failed pass is logged and retried on

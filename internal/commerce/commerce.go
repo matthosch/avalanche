@@ -85,8 +85,8 @@ type DueToGoLive struct {
 func ListDueToGoLive(ctx context.Context, q Querier, now time.Time) ([]DueToGoLive, error) {
 	rows, err := q.Query(ctx, `
 		SELECT id, units FROM flash_sales
-		WHERE status = 'SCHEDULED' AND starts_at <= $1
-		ORDER BY starts_at, id`, now)
+		WHERE status = $1 AND starts_at <= $2
+		ORDER BY starts_at, id`, Scheduled, now)
 	if err != nil {
 		return nil, fmt.Errorf("list flash sales due to go live: %w", err)
 	}
@@ -96,7 +96,7 @@ func ListDueToGoLive(ctx context.Context, q Querier, now time.Time) ([]DueToGoLi
 // MarkLive moves a Flash Sale SCHEDULED → LIVE. It does nothing to a Flash Sale that has
 // already left SCHEDULED, so running it twice is harmless.
 func MarkLive(ctx context.Context, q Querier, id uuid.UUID) error {
-	if _, err := q.Exec(ctx, `UPDATE flash_sales SET status = 'LIVE' WHERE id = $1 AND status = 'SCHEDULED'`, id); err != nil {
+	if _, err := q.Exec(ctx, `UPDATE flash_sales SET status = $2 WHERE id = $1 AND status = $3`, id, Live, Scheduled); err != nil {
 		return fmt.Errorf("mark flash sale %s live: %w", id, err)
 	}
 	return nil
@@ -104,7 +104,7 @@ func MarkLive(ctx context.Context, q Querier, id uuid.UUID) error {
 
 // EndDue moves every LIVE Flash Sale whose end time is at or before now to ENDED.
 func EndDue(ctx context.Context, q Querier, now time.Time) error {
-	if _, err := q.Exec(ctx, `UPDATE flash_sales SET status = 'ENDED' WHERE status = 'LIVE' AND ends_at <= $1`, now); err != nil {
+	if _, err := q.Exec(ctx, `UPDATE flash_sales SET status = $2 WHERE status = $3 AND ends_at <= $1`, now, Ended, Live); err != nil {
 		return fmt.Errorf("end flash sales: %w", err)
 	}
 	return nil
