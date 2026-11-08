@@ -21,8 +21,12 @@ tasks:
       - "{{.COMPOSE}} down -v"
 
   web:install:
-    desc: Install the web app's dependencies.
+    desc: Install the web app's dependencies (skipped when already up to date).
     dir: web
+    sources: [package.json, pnpm-lock.yaml]
+    # pnpm writes this on every install, so a missing node_modules always reinstalls,
+    # whatever checksum Task has cached.
+    generates: [node_modules/.modules.yaml]
     cmds:
       - pnpm install --frozen-lockfile
 
@@ -48,13 +52,6 @@ tasks:
     desc: Run api and the web app together (needs infra:up).
     deps: [dev:api, dev:web]
 
-  web:deps:
-    internal: true
-    dir: web
-    sources: [package.json, pnpm-lock.yaml]
-    cmds:
-      - pnpm install --frozen-lockfile
-
   dev:api:
     desc: Run api on :8080.
     cmds:
@@ -63,7 +60,7 @@ tasks:
   dev:web:
     desc: Run the web app on :5173, proxying /api to api.
     dir: web
-    deps: [web:deps]
+    deps: [web:install]
     cmds:
       - pnpm dev
 
