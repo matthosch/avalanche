@@ -49,13 +49,18 @@ tasks:
       - go run ./cmd/seed
 
   dev:
-    desc: Run api and the web app together (needs infra:up).
-    deps: [dev:api, dev:web]
+    desc: Run api, worker and the web app together (needs infra:up).
+    deps: [dev:api, dev:worker, dev:web]
 
   dev:api:
     desc: Run api on :8080.
     cmds:
       - go run ./cmd/api
+
+  dev:worker:
+    desc: Run worker, which moves Flash Sales LIVE and ENDED on schedule.
+    cmds:
+      - go run ./cmd/worker
 
   dev:web:
     desc: Run the web app on :5173, proxying /api to api.
@@ -72,11 +77,11 @@ tasks:
       - pnpm --dir web typecheck
 
   test:
-    desc: Run Go unit and integration tests.
+    desc: Run Go unit and integration tests (integration tests start their own containers; needs Docker).
     cmds:
       - go test ./...
 
   test:e2e:
-    desc: Run end-to-end tests against the running stack (needs infra:up and dev:api).
+    desc: Run end-to-end tests against the running stack (needs infra:up, dev:api and dev:worker).
     cmds:
       - go test -tags e2e -count=1 ./e2e

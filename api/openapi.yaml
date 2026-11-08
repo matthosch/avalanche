@@ -37,7 +37,7 @@ components:
     FlashSale:
       type: object
       description: A time-boxed event in which one Store sells a fixed number of units of one product at one price.
-      required: [id, store, productName, priceCents, currency, units, startsAt, endsAt]
+      required: [id, store, productName, priceCents, currency, units, startsAt, endsAt, status]
       properties:
         id:
           type: string
@@ -63,3 +63,14 @@ components:
         endsAt:
           type: string
           format: date-time
+        status:
+          $ref: "#/components/schemas/FlashSaleStatus"
+        unitsRemaining:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Units not yet held or sold. Present only while the Flash Sale is LIVE.
+    FlashSaleStatus:
+      type: string
+      description: Where a Flash Sale is in its lifecycle, SCHEDULED → LIVE → ENDED → CLOSED.
+      enum: [SCHEDULED, LIVE, ENDED, CLOSED]

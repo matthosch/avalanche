@@ -31,6 +31,30 @@ func (e FlashSaleCurrency) Valid() bool {
 	}
 }
 
+// Defines values for FlashSaleStatus.
+const (
+	CLOSED    FlashSaleStatus = "CLOSED"
+	ENDED     FlashSaleStatus = "ENDED"
+	LIVE      FlashSaleStatus = "LIVE"
+	SCHEDULED FlashSaleStatus = "SCHEDULED"
+)
+
+// Valid indicates whether the value is a known member of the FlashSaleStatus enum.
+func (e FlashSaleStatus) Valid() bool {
+	switch e {
+	case CLOSED:
+		return true
+	case ENDED:
+		return true
+	case LIVE:
+		return true
+	case SCHEDULED:
+		return true
+	default:
+		return false
+	}
+}
+
 // FlashSale A time-boxed event in which one Store sells a fixed number of units of one product at one price.
 type FlashSale struct {
 	Currency    FlashSaleCurrency  `json:"currency"`
@@ -39,12 +63,21 @@ type FlashSale struct {
 	PriceCents  int64              `json:"priceCents"`
 	ProductName string             `json:"productName"`
 	StartsAt    time.Time          `json:"startsAt"`
-	Store       Store              `json:"store"`
-	Units       int32              `json:"units"`
+
+	// Status Where a Flash Sale is in its lifecycle, SCHEDULED → LIVE → ENDED → CLOSED.
+	Status FlashSaleStatus `json:"status"`
+	Store  Store           `json:"store"`
+	Units  int32           `json:"units"`
+
+	// UnitsRemaining Units not yet held or sold. Present only while the Flash Sale is LIVE.
+	UnitsRemaining *int32 `json:"unitsRemaining,omitempty"`
 }
 
 // FlashSaleCurrency defines model for FlashSale.Currency.
 type FlashSaleCurrency string
+
+// FlashSaleStatus Where a Flash Sale is in its lifecycle, SCHEDULED → LIVE → ENDED → CLOSED.
+type FlashSaleStatus string
 
 // Store defines model for Store.
 type Store struct {

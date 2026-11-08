@@ -16,3 +16,8 @@ func Env(key, fallback string) string {
 func CommerceDatabaseURL() string {
 	return Env("COMMERCE_DATABASE_URL", "postgres://avalanche:avalanche@localhost:5432/commerce")
 }
+
+// RedisURL is the Redis connection string.
+func RedisURL() string {
+	return Env("REDIS_URL", "redis://localhost:6379/0")
+}
