@@ -1,0 +1,85 @@
+version: "3"
+
+vars:
+  COMPOSE: docker compose -f infra/docker-compose.yml
+  GENERATED: internal/api/gen web/src/api/schema.gen.ts
+
+tasks:
+  infra:up:
+    desc: Start Redis and Postgres (commerce + ledger) and wait until healthy.
+    cmds:
+      - "{{.COMPOSE}} up -d --wait"
+
+  infra:down:
+    desc: Stop the infrastructure (keeps data volumes).
+    cmds:
+      - "{{.COMPOSE}} down"
+
+  infra:reset:
+    desc: Stop the infrastructure and delete its data volumes.
+    cmds:
+      - "{{.COMPOSE}} down -v"
+
+  web:install:
+    desc: Install the web app's dependencies.
+    dir: web
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  gen:
+    desc: Regenerate the Go server and TS client from api/openapi.yaml.
+    cmds:
+      - go generate ./internal/api/gen
+      - pnpm --dir web gen
+
+  gen:check:
+    desc: Fail if generated code is out of date with api/openapi.yaml.
+    cmds:
+      - task: gen
+      - git diff --exit-code -- {{.GENERATED}}
+      - 'test -z "$(git ls-files --others --exclude-standard -- {{.GENERATED}})" || (echo "new generated files are not tracked: run task gen and commit" && exit 1)'
+
+  seed:
+    desc: Reset commerce to the demo Stores and Flash Sales.
+    cmds:
+      - go run ./cmd/seed
+
+  dev:
+    desc: Run api and the web app together (needs infra:up).
+    deps: [dev:api, dev:web]
+
+  web:deps:
+    internal: true
+    dir: web
+    sources: [package.json, pnpm-lock.yaml]
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  dev:api:
+    desc: Run api on :8080.
+    cmds:
+      - go run ./cmd/api
+
+  dev:web:
+    desc: Run the web app on :5173, proxying /api to api.
+    dir: web
+    deps: [web:deps]
+    cmds:
+      - pnpm dev
+
+  typecheck:
+    desc: Typecheck Go (including e2e) and the web app.
+    cmds:
+      - go vet ./...
+      - go vet -tags e2e ./e2e
+      - pnpm --dir web typecheck
+
+  test:
+    desc: Run Go unit and integration tests.
+    cmds:
+      - go test ./...
+
+  test:e2e:
+    desc: Run end-to-end tests against the running stack (needs infra:up and dev:api).
+    cmds:
+      - go test -tags e2e -count=1 ./e2e

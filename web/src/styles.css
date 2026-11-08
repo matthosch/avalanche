@@ -1,0 +1,25 @@
+:root {
+  --bg: #f7f7f5;
+  --fg: #1c1c1a;
+  --muted: #6b6b66;
+  --card: #ffffff;
+  --border: #e3e3df;
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --fg: #ededea;
+    --muted: #9a9a94;
+    --card: #20201e;
+    --border: #33332f;
+  }
+}
+body { margin: 0; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+.flash-sales { list-style: none; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.flash-sale { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.flash-sale h2 { margin: 4px 0 8px; font-size: 1.1rem; }
+.store, .schedule { margin: 0; color: var(--muted); font-size: 0.875rem; }
+.price { margin: 0 0 4px; font-variant-numeric: tabular-nums; }
