@@ -1,0 +1,3 @@
+# Every checkout uses LF, whatever core.autocrlf says, so generated code,
+# lockfiles and Task checksums match across machines.
+* text=auto eol=lf
