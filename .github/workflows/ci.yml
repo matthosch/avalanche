@@ -30,9 +30,10 @@ jobs:
         with:
           package_json_file: web/package.json
 
+      # Version comes from web/package.json's devEngines.runtime, which pnpm also uses locally.
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: web/package.json
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
