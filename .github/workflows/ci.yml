@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded PR runs are cancelled: every push to main gets its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -48,21 +49,24 @@ jobs:
       - name: Typecheck
         run: task typecheck
 
-      - name: Test
-        run: task test
-
+      # Before the tests, so integration tests can reach Postgres and Redis.
       - name: Start infrastructure
         run: task infra:up
+
+      - name: Test
+        run: task test
 
       - name: Start api
         run: |
           task dev:api > api.log 2>&1 &
           timeout 120 bash -c 'until curl -sf http://localhost:8080/api/flash-sales > /dev/null; do sleep 1; done' \
-            || { echo "api did not answer within 120s"; cat api.log; exit 1; }
+            || { echo "api did not answer within 120s"; exit 1; }
 
       - name: End-to-end tests
         run: task test:e2e
 
-      - name: api log
+      - name: Dump api and infrastructure logs on failure
         if: failure()
-        run: cat api.log || true
+        run: |
+          cat api.log || true
+          docker compose -f infra/docker-compose.yml logs || true
