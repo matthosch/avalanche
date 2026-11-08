@@ -1,0 +1,65 @@
+openapi: 3.0.3
+info:
+  title: Avalanche API
+  version: 0.1.0
+  description: Browser-facing API served by `api` (ADR-0005).
+servers:
+  - url: /api
+paths:
+  /flash-sales:
+    get:
+      operationId: listFlashSales
+      summary: List Flash Sales across all Stores, soonest start first.
+      responses:
+        "200":
+          description: Flash Sales.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flashSales]
+                properties:
+                  flashSales:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FlashSale"
+components:
+  schemas:
+    Store:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    FlashSale:
+      type: object
+      description: A time-boxed event in which one Store sells a fixed number of units of one product at one price.
+      required: [id, store, productName, priceCents, currency, units, startsAt, endsAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        store:
+          $ref: "#/components/schemas/Store"
+        productName:
+          type: string
+        priceCents:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          enum: [USD]
+        units:
+          type: integer
+          format: int32
+          minimum: 1
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
