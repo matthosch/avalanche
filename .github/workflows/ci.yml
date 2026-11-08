@@ -1,0 +1,68 @@
+# Runs the repo's checks through the Taskfile, so CI and local runs stay identical.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Version comes from web/package.json's packageManager.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - uses: go-task/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Install web dependencies
+        run: task web:install
+
+      - name: Generated code is up to date
+        run: task gen:check
+
+      - name: Typecheck
+        run: task typecheck
+
+      - name: Test
+        run: task test
+
+      - name: Start infrastructure
+        run: task infra:up
+
+      - name: Start api
+        run: |
+          task dev:api > api.log 2>&1 &
+          timeout 120 bash -c 'until curl -sf http://localhost:8080/api/flash-sales > /dev/null; do sleep 1; done' \
+            || { echo "api did not answer within 120s"; cat api.log; exit 1; }
+
+      - name: End-to-end tests
+        run: task test:e2e
+
+      - name: api log
+        if: failure()
+        run: cat api.log || true
