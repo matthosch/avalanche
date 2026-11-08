@@ -34,6 +34,8 @@ components:
           format: uuid
         name:
           type: string
+        slug:
+          type: string
     FlashSale:
       type: object
       description: A time-boxed event in which one Store sells a fixed number of units of one product at one price.
