@@ -25,8 +25,16 @@ type server struct {
 
 // NewHandler returns the HTTP handler for the whole API.
 func NewHandler(commerceDB *pgxpool.Pool, inv *inventory.Inventory) http.Handler {
-	strict := gen.NewStrictHandler(&server{commerce: commerceDB, inventory: inv}, nil)
+	strict := gen.NewStrictHandlerWithOptions(&server{commerce: commerceDB, inventory: inv}, nil,
+		gen.StrictHTTPServerOptions{ResponseErrorHandlerFunc: internalError})
 	return gen.HandlerWithOptions(strict, gen.StdHTTPServerOptions{BaseURL: BaseURL})
+}
+
+// internalError answers a request whose handler failed: the error goes to the log, and the
+// client gets a plain 500 that doesn't expose internals such as Redis or Postgres addresses.
+func internalError(w http.ResponseWriter, r *http.Request, err error) {
+	slog.ErrorContext(r.Context(), "api request failed", "method", r.Method, "path", r.URL.Path, "err", err)
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
 func (s *server) ListFlashSales(ctx context.Context, _ gen.ListFlashSalesRequestObject) (gen.ListFlashSalesResponseObject, error) {
@@ -92,7 +100,6 @@ var reserveRefusals = []struct {
 	reason gen.ReserveRefusalReason
 }{
 	{inventory.ErrSoldOut, gen.SOLDOUT},
-	{inventory.ErrAlreadyHolding, gen.ALREADYHOLDING},
 	{inventory.ErrNotLive, gen.NOTLIVE},
 }
 
@@ -100,6 +107,11 @@ var reserveRefusals = []struct {
 // inventory's call, never Postgres's (ADR-0001).
 func (s *server) Reserve(ctx context.Context, request gen.ReserveRequestObject) (gen.ReserveResponseObject, error) {
 	hold, err := s.inventory.Reserve(ctx, request.FlashSaleId, request.Params.XShopperId)
+	var holding *inventory.AlreadyHoldingError
+	if errors.As(err, &holding) {
+		existing := toHold(holding.Hold)
+		return gen.Reserve409JSONResponse{Reason: gen.ALREADYHOLDING, Hold: &existing}, nil
+	}
 	for _, refusal := range reserveRefusals {
 		if errors.Is(err, refusal.err) {
 			return gen.Reserve409JSONResponse{Reason: refusal.reason}, nil
@@ -108,10 +120,14 @@ func (s *server) Reserve(ctx context.Context, request gen.ReserveRequestObject) 
 	if err != nil {
 		return nil, err
 	}
-	return gen.Reserve201JSONResponse{
+	return gen.Reserve201JSONResponse(toHold(hold)), nil
+}
+
+func toHold(hold inventory.Hold) gen.Hold {
+	return gen.Hold{
 		Id:          hold.ID,
 		FlashSaleId: hold.FlashSaleID,
 		State:       gen.HoldState(hold.State),
 		ExpiresAt:   hold.ExpiresAt,
-	}, nil
+	}
 }

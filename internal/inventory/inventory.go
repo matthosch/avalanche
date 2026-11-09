@@ -26,14 +26,27 @@ var ErrNotLive = errors.New("inventory: flash sale not live")
 var ErrSoldOut = errors.New("inventory: flash sale sold out")
 
 // ErrAlreadyHolding means Reserve found the Shopper already has a HELD, PAYING or SOLD Hold
-// on the Flash Sale: the limit is one per Shopper per Flash Sale.
+// on the Flash Sale: the limit is one per Shopper per Flash Sale. Reserve returns it as an
+// *AlreadyHoldingError carrying that Hold.
 var ErrAlreadyHolding = errors.New("inventory: shopper already holding")
+
+// AlreadyHoldingError is Reserve's refusal when the Shopper already holds a unit of the Flash
+// Sale. It carries their Hold, so a Shopper who lost the reply to their first reserve, or
+// retried it, still gets the Hold. It matches ErrAlreadyHolding with errors.Is.
+type AlreadyHoldingError struct {
+	Hold Hold
+}
+
+func (e *AlreadyHoldingError) Error() string {
+	return fmt.Sprintf("%v: hold %s", ErrAlreadyHolding, e.Hold.ID)
+}
+
+func (e *AlreadyHoldingError) Is(target error) bool { return target == ErrAlreadyHolding }
 
 // refusals maps each reason the reserve script gives for not creating a Hold to its error.
 var refusals = map[string]error{
-	"NOT_LIVE":        ErrNotLive,
-	"SOLD_OUT":        ErrSoldOut,
-	"ALREADY_HOLDING": ErrAlreadyHolding,
+	"NOT_LIVE": ErrNotLive,
+	"SOLD_OUT": ErrSoldOut,
 }
 
 // Counts is where a Flash Sale's units are right now. For a loaded Flash Sale,
@@ -117,6 +130,9 @@ func (inv *Inventory) Reserve(ctx context.Context, flashSaleID, shopperID uuid.U
 	if err != nil {
 		return Hold{}, fmt.Errorf("inventory: reserve %s: %w", flashSaleID, err)
 	}
+	if r, ok := result.([]any); ok && len(r) == 2 && r[0] == "ALREADY_HOLDING" {
+		return Hold{}, inv.alreadyHolding(ctx, flashSaleID, shopperID, fmt.Sprint(r[1]))
+	}
 	expiresAt, ok := result.(int64)
 	if !ok {
 		if refusal, ok := refusals[fmt.Sprint(result)]; ok {
@@ -181,4 +197,30 @@ func holdKey(flashSaleID, holdID uuid.UUID) string {
 // expiriesKey is the sorted set of a Flash Sale's Hold IDs, scored by expiry (ADR-0002).
 func expiriesKey(flashSaleID uuid.UUID) string {
 	return "inventory:{" + flashSaleID.String() + "}:expiries"
+}
+
+// alreadyHolding reads the Shopper's existing Hold for Reserve's refusal. The Hold outlives the
+// Shopper's entry that pointed reserve at it, so it is there to read.
+func (inv *Inventory) alreadyHolding(ctx context.Context, flashSaleID, shopperID uuid.UUID, holdID string) error {
+	id, err := uuid.Parse(holdID)
+	if err != nil {
+		return fmt.Errorf("inventory: reserve %s: shopper's hold %q: %w", flashSaleID, holdID, err)
+	}
+	values, err := inv.rdb.HMGet(ctx, holdKey(flashSaleID, id), "state", "expires_at").Result()
+	if err != nil {
+		return fmt.Errorf("inventory: reserve %s: read hold %s: %w", flashSaleID, id, err)
+	}
+	state, _ := values[0].(string)
+	expires, _ := values[1].(string)
+	expiresAt, err := strconv.ParseInt(expires, 10, 64)
+	if state == "" || err != nil {
+		return fmt.Errorf("inventory: reserve %s: hold %s is missing or malformed: %v", flashSaleID, id, values)
+	}
+	return &AlreadyHoldingError{Hold: Hold{
+		ID:          id,
+		FlashSaleID: flashSaleID,
+		ShopperID:   shopperID,
+		State:       HoldState(state),
+		ExpiresAt:   time.UnixMilli(expiresAt).UTC(),
+	}}
 }

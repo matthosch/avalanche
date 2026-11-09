@@ -38,8 +38,12 @@ export function App() {
       const { data, error } = await api.POST("/flash-sales/{flashSaleId}/holds", {
         params: { path: { flashSaleId }, header: { "X-Shopper-Id": shopper } },
       });
-      if (data) setAttempt({ status: "held", hold: data });
-      else setAttempt({ status: "refused", message: error ? refusalMessages[error.reason] : "Reserve failed." });
+      // ALREADY_HOLDING carries the Shopper's existing Hold: after a reload or a lost reply,
+      // reserving again is how they get it back.
+      const hold = data ?? error?.hold;
+      if (hold) setAttempt({ status: "held", hold });
+      // Only a 409 has a typed body; anything else (a 500's plain text) has no reason.
+      else setAttempt({ status: "refused", message: (error && refusalMessages[error.reason]) || "Reserve failed." });
     } catch (err: unknown) {
       setAttempt({ status: "refused", message: `Reserve failed: ${String(err)}` });
     }
@@ -102,7 +106,8 @@ export function App() {
                 <time dateTime={flashSale.startsAt}>{timeFormat.format(new Date(flashSale.startsAt))}</time> –{" "}
                 <time dateTime={flashSale.endsAt}>{timeFormat.format(new Date(flashSale.endsAt))}</time>
               </p>
-              {flashSale.status === "LIVE" && shopperId && (
+              {/* A Hold made before the end may still be paid until it expires, so it outlives LIVE. */}
+              {(flashSale.status === "LIVE" || holdAttempts[flashSale.id]?.status === "held") && shopperId && (
                 <ReserveControl
                   attempt={holdAttempts[flashSale.id]}
                   onReserve={() => void reserve(shopperId, flashSale.id)}

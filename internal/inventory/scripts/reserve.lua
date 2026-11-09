@@ -8,7 +8,8 @@
 -- ARGV[2] = the new Hold's ID
 -- ARGV[3] = the Hold window, in milliseconds
 -- Returns the Hold's expiry time in Unix milliseconds, on Redis server time, or the reason
--- there is no Hold: 'NOT_LIVE', 'ALREADY_HOLDING' or 'SOLD_OUT'.
+-- there is no Hold: 'NOT_LIVE', {'ALREADY_HOLDING', <the ID of the Shopper's Hold>} or
+-- 'SOLD_OUT'.
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 
@@ -21,8 +22,9 @@ end
 
 -- One Hold per Shopper per Flash Sale. A Shopper's entry stays while their Hold is HELD,
 -- PAYING or SOLD; releasing the Hold must remove it, which frees them to reserve again.
-if redis.call('HEXISTS', KEYS[2], ARGV[1]) == 1 then
-  return 'ALREADY_HOLDING'
+local existing = redis.call('HGET', KEYS[2], ARGV[1])
+if existing then
+  return {'ALREADY_HOLDING', existing}
 end
 
 if tonumber(redis.call('HGET', KEYS[1], 'available')) <= 0 then

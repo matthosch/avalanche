@@ -141,6 +141,9 @@ type HoldState string
 
 // ReserveRefusal defines model for ReserveRefusal.
 type ReserveRefusal struct {
+	// Hold A Shopper's temporary claim on one unit of a Flash Sale, which either becomes an Order or is released.
+	Hold *Hold `json:"hold,omitempty"`
+
 	// Reason SOLD_OUT: no units are available right now (released Holds may put some back). ALREADY_HOLDING: the Shopper already has a HELD, PAYING or SOLD Hold on this Flash Sale. NOT_LIVE: the Flash Sale hasn't started or has ended.
 	Reason ReserveRefusalReason `json:"reason"`
 }

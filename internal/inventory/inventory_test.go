@@ -247,13 +247,23 @@ func TestShopperWithAHoldIsAlreadyHolding(t *testing.T) {
 	inv := newInventory(t)
 	flashSale, other := loadLive(t, inv, 10), loadLive(t, inv, 10)
 	shopper := uuid.Must(uuid.NewV7())
-	if _, err := inv.Reserve(ctx, flashSale, shopper); err != nil {
+	first, err := inv.Reserve(ctx, flashSale, shopper)
+	if err != nil {
 		t.Fatalf("first reserve: %v", err)
 	}
 
-	_, err := inv.Reserve(ctx, flashSale, shopper)
+	_, err = inv.Reserve(ctx, flashSale, shopper)
 	if !errors.Is(err, inventory.ErrAlreadyHolding) {
 		t.Errorf("second reserve: err = %v, want ErrAlreadyHolding", err)
+	}
+	// The refusal hands back the Hold the Shopper already has, so a Shopper who lost the first
+	// reply (or reloaded the page) can still find and pay for it.
+	var holding *inventory.AlreadyHoldingError
+	if !errors.As(err, &holding) {
+		t.Fatalf("second reserve: err = %v, want an *AlreadyHoldingError", err)
+	}
+	if holding.Hold != first {
+		t.Errorf("already holding %+v, want the first Hold %+v", holding.Hold, first)
 	}
 	counts, err := inv.Counts(ctx, flashSale)
 	if err != nil {
@@ -270,7 +280,7 @@ func TestShopperWithAHoldIsAlreadyHolding(t *testing.T) {
 }
 
 // race has attempts goroutines each call reserve once, all released at the same moment, and
-// tallies the outcomes by error (nil for a Hold).
+// tallies the outcomes by refusal (nil for a Hold).
 func race(t *testing.T, attempts int, reserve func(i int) error) map[error]int {
 	t.Helper()
 	var (
@@ -282,15 +292,25 @@ func race(t *testing.T, attempts int, reserve func(i int) error) map[error]int {
 	for i := range attempts {
 		wg.Go(func() {
 			<-start
-			err := reserve(i)
+			outcome := refusal(reserve(i))
 			mu.Lock()
 			defer mu.Unlock()
-			tally[err]++
+			tally[outcome]++
 		})
 	}
 	close(start)
 	wg.Wait()
 	return tally
+}
+
+// refusal is which of the inventory's refusals err is, or err itself if none.
+func refusal(err error) error {
+	for _, r := range []error{inventory.ErrSoldOut, inventory.ErrAlreadyHolding, inventory.ErrNotLive} {
+		if errors.Is(err, r) {
+			return r
+		}
+	}
+	return err
 }
 
 func TestRacingShoppersGetExactlyAsManyHoldsAsUnits(t *testing.T) {
@@ -324,14 +344,28 @@ func TestShopperRacingThemselvesGetsOneHold(t *testing.T) {
 	flashSale := loadLive(t, inv, 10)
 	shopper := uuid.Must(uuid.NewV7())
 
+	var (
+		mu   sync.Mutex
+		seen = map[uuid.UUID]int{} // Hold ID -> attempts that got it, as a Hold or as already holding
+	)
 	tally := race(t, attempts, func(int) error {
-		_, err := inv.Reserve(ctx, flashSale, shopper)
+		hold, err := inv.Reserve(ctx, flashSale, shopper)
+		var holding *inventory.AlreadyHoldingError
+		if errors.As(err, &holding) {
+			hold = holding.Hold
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		seen[hold.ID]++
 		return err
 	})
 
 	want := map[error]int{nil: 1, inventory.ErrAlreadyHolding: attempts - 1}
 	if !maps.Equal(tally, want) {
 		t.Errorf("outcomes = %v, want %v", tally, want)
+	}
+	if len(seen) != 1 {
+		t.Errorf("attempts saw %d different Holds, want every one to see the same Hold: %v", len(seen), seen)
 	}
 	counts, err := inv.Counts(ctx, flashSale)
 	if err != nil {

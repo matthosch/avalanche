@@ -60,7 +60,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Hold"
         "409":
-          description: No Hold. The reason says why.
+          description: No new Hold. The reason says why; for ALREADY_HOLDING, `hold` is the Shopper's existing Hold.
           content:
             application/json:
               schema:
@@ -157,3 +157,5 @@ components:
             ALREADY_HOLDING: the Shopper already has a HELD, PAYING or SOLD Hold on this Flash Sale.
             NOT_LIVE: the Flash Sale hasn't started or has ended.
           enum: [SOLD_OUT, ALREADY_HOLDING, NOT_LIVE]
+        hold:
+          $ref: "#/components/schemas/Hold"

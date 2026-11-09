@@ -61,12 +61,24 @@ func TestSignedInShopperReservesAHold(t *testing.T) {
 		t.Errorf("Aurora units remaining = %s, want 499", showUnits(unitsLeft))
 	}
 
+	// Reserving again (a retry, a lost reply, a reload) hands back the Shopper's Hold.
+	status, body = reserve(t, aurora.Id, shopper)
+	var again gen.ReserveRefusal
+	if err := json.Unmarshal(body, &again); err != nil {
+		t.Fatalf("reserve again: status %d, body %s: %v", status, body, err)
+	}
+	if status != http.StatusConflict || again.Reason != gen.ALREADYHOLDING {
+		t.Errorf("reserve again: status %d, body %s; want 409 ALREADY_HOLDING", status, body)
+	}
+	if again.Hold == nil || again.Hold.Id != hold.Id || !again.Hold.ExpiresAt.Equal(hold.ExpiresAt) || again.Hold.State != gen.HELD {
+		t.Errorf("reserve again: hold %+v, want the first Hold %+v", again.Hold, hold)
+	}
+
 	for _, refused := range []struct {
 		name      string
 		flashSale uuid.UUID
 		want      gen.ReserveRefusalReason
 	}{
-		{"same Shopper again", aurora.Id, gen.ALREADYHOLDING},
 		{"scheduled Flash Sale", flashSales["Ridgeline Daypack"].Id, gen.NOTLIVE},
 		{"ended Flash Sale", flashSales["Halo Wireless Headphones"].Id, gen.NOTLIVE},
 		{"unknown Flash Sale", uuid.Must(uuid.NewV7()), gen.NOTLIVE},

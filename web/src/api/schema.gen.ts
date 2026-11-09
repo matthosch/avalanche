@@ -119,6 +119,7 @@ export interface components {
              * @enum {string}
              */
             reason: "SOLD_OUT" | "ALREADY_HOLDING" | "NOT_LIVE";
+            hold?: components["schemas"]["Hold"];
         };
     };
     responses: never;
@@ -200,7 +201,7 @@ export interface operations {
                     "application/json": components["schemas"]["Hold"];
                 };
             };
-            /** @description No Hold. The reason says why. */
+            /** @description No new Hold. The reason says why; for ALREADY_HOLDING, `hold` is the Shopper's existing Hold. */
             409: {
                 headers: {
                     [name: string]: unknown;
