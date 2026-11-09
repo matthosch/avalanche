@@ -108,6 +108,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PayRefusal"
+  /stores/{storeId}/balance:
+    get:
+      operationId: getStoreBalance
+      summary: What the Platform owes a Store after the Platform's Fee, from the ledger.
+      parameters:
+        - name: storeId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The Store's balance, computed from its Postings. A Store with no Orders has 0.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreBalance"
+  /platform/fee-revenue:
+    get:
+      operationId: getFeeRevenue
+      summary: The Platform's Fee revenue across every Order, from the ledger.
+      responses:
+        "200":
+          description: The Platform's Fee revenue, computed from its Postings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeeRevenue"
 components:
   parameters:
     ShopperId:
@@ -244,3 +273,26 @@ components:
         createdAt:
           type: string
           format: date-time
+    StoreBalance:
+      type: object
+      required: [storeId, balanceCents, currency]
+      properties:
+        storeId:
+          type: string
+          format: uuid
+        balanceCents:
+          type: integer
+          format: int64
+        currency:
+          type: string
+          enum: [USD]
+    FeeRevenue:
+      type: object
+      required: [feeRevenueCents, currency]
+      properties:
+        feeRevenueCents:
+          type: integer
+          format: int64
+        currency:
+          type: string
+          enum: [USD]

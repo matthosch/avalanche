@@ -70,6 +70,7 @@ require (
 	github.com/speakeasy-api/openapi v1.24.0 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/testcontainers/testcontainers-go v0.45.0 // indirect
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/vmware-labs/yaml-jsonpath v0.3.2 // indirect

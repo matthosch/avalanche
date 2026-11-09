@@ -21,6 +21,16 @@ func CommerceDatabaseURL() string {
 	return Env("COMMERCE_DATABASE_URL", "postgres://avalanche:avalanche@localhost:5432/commerce")
 }
 
+// LedgerDatabaseURL is the ledger Postgres connection string.
+func LedgerDatabaseURL() string {
+	return Env("LEDGER_DATABASE_URL", "postgres://avalanche:avalanche@localhost:5432/ledger")
+}
+
+// LedgerURL is the base URL of the ledger's internal REST API, which only api calls.
+func LedgerURL() string {
+	return Env("LEDGER_URL", "http://localhost:8081")
+}
+
 // RedisURL is the Redis connection string.
 func RedisURL() string {
 	return Env("REDIS_URL", "redis://localhost:6379/0")

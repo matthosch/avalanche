@@ -50,6 +50,9 @@ func TestShopperPaysForAHoldAndGetsAnOrder(t *testing.T) {
 		t.Errorf("another Shopper pays: status %d (%s), want 404", status, body)
 	}
 
+	// Fee revenue is Platform-wide and the ledger outlives each seed, so only its growth counts.
+	revenueBefore := feeRevenue(t)
+
 	status, body = pay(t, hold, shopper, "pm_card_visa")
 	if status != http.StatusOK {
 		t.Fatalf("pay: status %d (%s), want 200", status, body)
@@ -62,21 +65,16 @@ func TestShopperPaysForAHoldAndGetsAnOrder(t *testing.T) {
 		t.Errorf("order = %+v, want a UUIDv7 Order of 12900 USD for Hold %s on %s", order, hold.Id, aurora.Id)
 	}
 
-	// One Order and one OrderCompleted outbox row for the Hold, and the Hold is SOLD.
-	// These queries read commerce tables, which spec #1 keeps tests away from, because #5 asks
-	// this test to find the Order and outbox row and nothing public shows them yet. Once #6's
-	// relay and ledger exist, the outbox query gives way to the Store balance and Fee revenue
-	// read through api; the Order count, to an Orders = Journal Entries invariant.
-	var orders, outboxRows int
+	// One Order for the Hold, and the Hold is SOLD. The Order count reads a commerce table,
+	// which spec #1 keeps tests away from, because nothing public counts Orders yet; it gives
+	// way to the Orders = Journal Entries invariant (#8).
+	var orders int
 	var paymentIntentID string
 	if err := pool.QueryRow(ctx, `SELECT count(*), min(payment_intent_id) FROM orders WHERE hold_id = $1`, hold.Id).Scan(&orders, &paymentIntentID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE event_type = 'OrderCompleted' AND payload->>'order_id' = $1`, order.Id.String()).Scan(&outboxRows); err != nil {
-		t.Fatal(err)
-	}
-	if orders != 1 || outboxRows != 1 {
-		t.Errorf("found %d Orders and %d outbox rows for the Hold, want 1 and 1", orders, outboxRows)
+	if orders != 1 {
+		t.Errorf("found %d Orders for the Hold, want 1", orders)
 	}
 	status, body = reserve(t, aurora.Id, shopper)
 	var again gen.ReserveRefusal
@@ -97,6 +95,15 @@ func TestShopperPaysForAHoldAndGetsAnOrder(t *testing.T) {
 	wantMetadata := map[string]string{"hold_id": hold.Id.String(), "flash_sale_id": aurora.Id.String()}
 	if intent.Status != stripe.PaymentIntentStatusSucceeded || intent.Amount != 12900 || !maps.Equal(intent.Metadata, wantMetadata) {
 		t.Errorf("payment intent = %s %d %v, want succeeded 12900 with metadata %v", intent.Status, intent.Amount, intent.Metadata, wantMetadata)
+	}
+
+	// The Order reaches the ledger through the outbox, relay and stream, and is split as in
+	// ADR-0004 at the default 500 bps Fee: of 12900, the Platform takes 645 and the Store 12255.
+	if got := waitForStoreBalance(t, aurora.Store.Id, 12255); got != 12255 {
+		t.Errorf("store balance = %d, want 12255", got)
+	}
+	if got := feeRevenue(t) - revenueBefore; got != 645 {
+		t.Errorf("fee revenue grew by %d, want 645", got)
 	}
 
 	// A SOLD Hold can't be paid for again.
@@ -167,6 +174,44 @@ func pay(t *testing.T, hold gen.Hold, shopper uuid.UUID, paymentMethod string) (
 		t.Fatal(err)
 	}
 	return res.StatusCode, body.Bytes()
+}
+
+// waitForStoreBalance polls the Store's balance until it is want or 10 s pass, since the ledger
+// books Orders asynchronously, and returns the last balance read.
+func waitForStoreBalance(t *testing.T, storeID uuid.UUID, want int64) int64 {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var balance gen.StoreBalance
+		getJSON(t, "/api/stores/"+storeID.String()+"/balance", &balance)
+		if balance.BalanceCents == want || time.Now().After(deadline) {
+			return balance.BalanceCents
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func feeRevenue(t *testing.T) int64 {
+	t.Helper()
+	var revenue gen.FeeRevenue
+	getJSON(t, "/api/platform/fee-revenue", &revenue)
+	return revenue.FeeRevenueCents
+}
+
+// getJSON GETs path from api, expecting 200, and decodes the body into out.
+func getJSON(t *testing.T, path string, out any) {
+	t.Helper()
+	res, err := http.Get(apiURL() + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status %d, want 200", path, res.StatusCode)
+	}
+	if err := json.NewDecoder(res.Body).Decode(out); err != nil {
+		t.Fatalf("GET %s: decode: %v", path, err)
+	}
 }
 
 func paymentsClient() *stripe.Client {

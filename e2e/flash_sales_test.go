@@ -2,7 +2,7 @@
 
 // Package e2e drives the running stack from outside, through api's public HTTP endpoints
 // (the system-boundary seam in spec #1). Run with `task test:e2e` while `task infra:up`,
-// `task dev:api` and `task dev:worker` are running. Tests re-seed commerce, so they reset its demo data.
+// `task dev:api`, `task dev:worker` and `task dev:ledger` are running. Tests re-seed commerce, so they reset its demo data.
 package e2e
 
 import (
