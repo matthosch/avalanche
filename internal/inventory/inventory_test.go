@@ -3,6 +3,8 @@ package inventory_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -12,27 +14,41 @@ import (
 	"github.com/matthosch/avalanche/internal/inventory"
 )
 
-// newInventory starts a throwaway Redis (seam 2 in spec #1: the inventory module against real
-// Redis) and returns an Inventory backed by it.
-func newInventory(t *testing.T) *inventory.Inventory {
-	t.Helper()
+// redisClient is one throwaway Redis shared by every test in the package (seam 2 in spec #1:
+// the inventory module against real Redis). Tests stay independent because each uses fresh
+// Flash Sale IDs.
+var redisClient *redis.Client
+
+func TestMain(m *testing.M) {
+	os.Exit(runWithRedis(m))
+}
+
+func runWithRedis(m *testing.M) int {
 	ctx := context.Background()
 	container, err := tcredis.Run(ctx, "redis:8.2-alpine")
 	if err != nil {
-		t.Fatalf("start redis: %v", err)
+		fmt.Fprintln(os.Stderr, "start redis:", err)
+		return 1
 	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	defer func() { _ = container.Terminate(context.Background()) }()
 	url, err := container.ConnectionString(ctx)
 	if err != nil {
-		t.Fatal(err)
+		fmt.Fprintln(os.Stderr, "redis url:", err)
+		return 1
 	}
 	opts, err := redis.ParseURL(url)
 	if err != nil {
-		t.Fatal(err)
+		fmt.Fprintln(os.Stderr, "parse redis url:", err)
+		return 1
 	}
-	client := redis.NewClient(opts)
-	t.Cleanup(func() { _ = client.Close() })
-	return inventory.New(client)
+	redisClient = redis.NewClient(opts)
+	defer redisClient.Close()
+	return m.Run()
+}
+
+func newInventory(t *testing.T) *inventory.Inventory {
+	t.Helper()
+	return inventory.New(redisClient)
 }
 
 func TestLoadMakesEveryUnitAvailable(t *testing.T) {
