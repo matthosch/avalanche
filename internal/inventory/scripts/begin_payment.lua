@@ -5,7 +5,7 @@
 -- ARGV[1] = the Hold's ID
 -- ARGV[2] = the ID of the Shopper paying
 -- Returns the Hold's expiry time in Unix milliseconds, or why it can't be paid for:
--- 'NOT_FOUND', or {'NOT_HELD', <state>} when the Hold has already left HELD.
+-- 'NOT_FOUND', or {'WRONG_STATE', <state>} when the Hold has already left HELD.
 local id = ARGV[1]
 local hold = redis.call('HMGET', KEYS[2], id .. ':shopper', id .. ':state', id .. ':expires_at')
 
@@ -15,7 +15,7 @@ if hold[1] ~= ARGV[2] then
 end
 
 if hold[2] ~= 'HELD' then
-  return {'NOT_HELD', hold[2]}
+  return {'WRONG_STATE', hold[2]}
 end
 
 redis.call('HSET', KEYS[2], id .. ':state', 'PAYING')

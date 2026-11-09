@@ -471,6 +471,20 @@ func wantCounts(t *testing.T, inv *inventory.Inventory, flashSale uuid.UUID, wan
 	}
 }
 
+// wantWrongState fails the test unless err refuses a Hold that is in state got where the
+// operation needed want.
+func wantWrongState(t *testing.T, what string, err error, want, got inventory.HoldState) {
+	t.Helper()
+	var wrong *inventory.WrongStateError
+	if !errors.As(err, &wrong) || !errors.Is(err, inventory.ErrWrongState) {
+		t.Errorf("%s: err = %v, want a *WrongStateError", what, err)
+		return
+	}
+	if wrong.Want != want || wrong.Got != got {
+		t.Errorf("%s: wrong state want %s, got %s; expected want %s, got %s", what, wrong.Want, wrong.Got, want, got)
+	}
+}
+
 func TestBeginPaymentMovesTheHoldToPaying(t *testing.T) {
 	ctx := context.Background()
 	inv := newInventory(t)
@@ -522,13 +536,7 @@ func TestBeginPaymentOnlyMovesAHeldHold(t *testing.T) {
 	}
 
 	_, err := inv.BeginPayment(ctx, flashSale, hold.ID, hold.ShopperID)
-	var notHeld *inventory.NotHeldError
-	if !errors.As(err, &notHeld) || !errors.Is(err, inventory.ErrNotHeld) {
-		t.Fatalf("begin payment again: err = %v, want a *NotHeldError", err)
-	}
-	if notHeld.State != inventory.Paying {
-		t.Errorf("not held: state %s, want PAYING", notHeld.State)
-	}
+	wantWrongState(t, "begin payment again", err, inventory.Held, inventory.Paying)
 	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Paying: 1})
 }
 
@@ -564,10 +572,7 @@ func TestOnlyAPayingHoldTakesAPaymentIntent(t *testing.T) {
 	hold := reserveOne(t, inv, flashSale)
 
 	err := inv.RecordPaymentIntent(ctx, flashSale, hold.ID, "pi_3Q1example")
-	var notPaying *inventory.NotPayingError
-	if !errors.As(err, &notPaying) || notPaying.State != inventory.Held {
-		t.Errorf("record on a HELD Hold: err = %v, want a *NotPayingError for HELD", err)
-	}
+	wantWrongState(t, "record on a HELD Hold", err, inventory.Paying, inventory.Held)
 	if err := inv.RecordPaymentIntent(ctx, flashSale, uuid.Must(uuid.NewV7()), "pi_3Q1example"); !errors.Is(err, inventory.ErrHoldNotFound) {
 		t.Errorf("record on an unknown Hold: err = %v, want ErrHoldNotFound", err)
 	}
@@ -635,10 +640,7 @@ func TestConfirmOnlySellsAPayingHold(t *testing.T) {
 	hold := reserveOne(t, inv, flashSale)
 
 	err := inv.Confirm(ctx, flashSale, hold.ID)
-	var notPaying *inventory.NotPayingError
-	if !errors.As(err, &notPaying) || notPaying.State != inventory.Held {
-		t.Errorf("confirm a HELD Hold: err = %v, want a *NotPayingError for HELD", err)
-	}
+	wantWrongState(t, "confirm a HELD Hold", err, inventory.Paying, inventory.Held)
 	if err := inv.Confirm(ctx, flashSale, uuid.Must(uuid.NewV7())); !errors.Is(err, inventory.ErrHoldNotFound) {
 		t.Errorf("confirm an unknown Hold: err = %v, want ErrHoldNotFound", err)
 	}

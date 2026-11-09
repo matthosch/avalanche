@@ -140,10 +140,10 @@ func (s *server) Pay(ctx context.Context, request gen.PayRequestObject) (gen.Pay
 		return gen.Pay400Response{}, nil
 	}
 	order, err := s.checkout.Pay(ctx, request.Params.XShopperId, request.Body.FlashSaleId, request.HoldId, string(request.Body.PaymentMethod))
-	if errors.Is(err, inventory.ErrHoldNotFound) {
+	if errors.Is(err, checkout.ErrHoldNotFound) {
 		return gen.Pay404Response{}, nil
 	}
-	var notHeld *inventory.NotHeldError
+	var notHeld *checkout.NotHeldError
 	if errors.As(err, &notHeld) {
 		return gen.Pay409JSONResponse{Reason: gen.NOTHELD, State: gen.HoldState(notHeld.State)}, nil
 	}

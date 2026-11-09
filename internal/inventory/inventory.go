@@ -48,33 +48,21 @@ func (e *AlreadyHoldingError) Is(target error) bool { return target == ErrAlread
 // Shopper's Hold counts as not found, so only the Hold's own Shopper can pay for it.
 var ErrHoldNotFound = errors.New("inventory: hold not found")
 
-// ErrNotHeld means BeginPayment found the Hold no longer HELD: already PAYING or SOLD, or
-// RELEASED. BeginPayment returns it as a *NotHeldError carrying the Hold's state.
-var ErrNotHeld = errors.New("inventory: hold not held")
+// ErrWrongState means a Hold isn't in the state an operation needs, such as paying for a Hold
+// that has left HELD. It comes as a *WrongStateError.
+var ErrWrongState = errors.New("inventory: hold in wrong state")
 
-// NotHeldError is BeginPayment's refusal of a Hold that has left HELD. It matches ErrNotHeld
-// with errors.Is.
-type NotHeldError struct {
-	State HoldState
+// WrongStateError is the refusal of a Hold that isn't in the state an operation needs: Want is
+// that state, Got the Hold's state now. It matches ErrWrongState with errors.Is.
+type WrongStateError struct {
+	Want, Got HoldState
 }
 
-func (e *NotHeldError) Error() string { return fmt.Sprintf("%v: hold is %s", ErrNotHeld, e.State) }
-
-func (e *NotHeldError) Is(target error) bool { return target == ErrNotHeld }
-
-// ErrNotPaying means the Hold isn't PAYING, so it isn't being paid for. It comes as a
-// *NotPayingError carrying the Hold's state.
-var ErrNotPaying = errors.New("inventory: hold not paying")
-
-// NotPayingError is the refusal of a Hold that isn't PAYING. It matches ErrNotPaying with
-// errors.Is.
-type NotPayingError struct {
-	State HoldState
+func (e *WrongStateError) Error() string {
+	return fmt.Sprintf("%v: want %s, hold is %s", ErrWrongState, e.Want, e.Got)
 }
 
-func (e *NotPayingError) Error() string { return fmt.Sprintf("%v: hold is %s", ErrNotPaying, e.State) }
-
-func (e *NotPayingError) Is(target error) bool { return target == ErrNotPaying }
+func (e *WrongStateError) Is(target error) bool { return target == ErrWrongState }
 
 // refusals maps each reason the reserve script gives for not creating a Hold to its error.
 var refusals = map[string]error{
@@ -217,23 +205,19 @@ var beginPaymentSrc string
 var beginPayment = redis.NewScript(beginPaymentSrc)
 
 // BeginPayment moves a Shopper's HELD Hold to PAYING, before the Shopper is charged, so the
-// unit can no longer expire out from under the payment (ADR-0002).
+// unit can no longer expire out from under the payment (ADR-0002). A Hold that has left HELD
+// gets a *WrongStateError.
 func (inv *Inventory) BeginPayment(ctx context.Context, flashSaleID, holdID, shopperID uuid.UUID) (Hold, error) {
 	keys := []string{countsKey(flashSaleID), holdsKey(flashSaleID)}
 	result, err := beginPayment.Run(ctx, inv.rdb, keys, holdID.String(), shopperID.String()).Result()
 	if err != nil {
 		return Hold{}, fmt.Errorf("inventory: begin payment %s: %w", holdID, err)
 	}
-	switch r := result.(type) {
-	case int64:
-		return newHold(holdID, flashSaleID, shopperID, Paying, r), nil
-	case []any:
-		if len(r) == 2 && r[0] == "NOT_HELD" {
-			return Hold{}, &NotHeldError{State: HoldState(fmt.Sprint(r[1]))}
-		}
+	if expiresAt, ok := result.(int64); ok {
+		return newHold(holdID, flashSaleID, shopperID, Paying, expiresAt), nil
 	}
-	if result == "NOT_FOUND" {
-		return Hold{}, ErrHoldNotFound
+	if err := refusal(result, Held); err != nil {
+		return Hold{}, err
 	}
 	return Hold{}, fmt.Errorf("inventory: begin payment %s: unexpected result %v", holdID, result)
 }
@@ -243,13 +227,13 @@ var recordPaymentIntentSrc string
 var recordPaymentIntent = redis.NewScript(recordPaymentIntentSrc)
 
 // RecordPaymentIntent stores the ID of the PaymentIntent charging a PAYING Hold, so recovery
-// can retrieve it by that ID (ADR-0007). A Hold that isn't PAYING gets a *NotPayingError.
+// can retrieve it by that ID (ADR-0007). A Hold that isn't PAYING gets a *WrongStateError.
 func (inv *Inventory) RecordPaymentIntent(ctx context.Context, flashSaleID, holdID uuid.UUID, paymentIntentID string) error {
 	result, err := recordPaymentIntent.Run(ctx, inv.rdb, []string{holdsKey(flashSaleID)}, holdID.String(), paymentIntentID).Result()
 	if err != nil {
 		return fmt.Errorf("inventory: record payment intent %s: %w", holdID, err)
 	}
-	if err := notPaying(result); err != nil {
+	if err := refusal(result, Paying); err != nil {
 		return err
 	}
 	if result != "OK" {
@@ -264,14 +248,14 @@ var confirm = redis.NewScript(confirmSrc)
 
 // Confirm moves a PAYING Hold to SOLD. Commerce calls it only after the Hold's Order is
 // written (ADR-0006). It is idempotent: confirming a SOLD Hold again succeeds and changes
-// nothing. A Hold that is neither PAYING nor SOLD gets a *NotPayingError.
+// nothing. A Hold that is neither PAYING nor SOLD gets a *WrongStateError.
 func (inv *Inventory) Confirm(ctx context.Context, flashSaleID, holdID uuid.UUID) error {
 	keys := []string{countsKey(flashSaleID), holdsKey(flashSaleID)}
 	result, err := confirm.Run(ctx, inv.rdb, keys, holdID.String()).Result()
 	if err != nil {
 		return fmt.Errorf("inventory: confirm %s: %w", holdID, err)
 	}
-	if err := notPaying(result); err != nil {
+	if err := refusal(result, Paying); err != nil {
 		return err
 	}
 	if result != "OK" {
@@ -280,14 +264,14 @@ func (inv *Inventory) Confirm(ctx context.Context, flashSaleID, holdID uuid.UUID
 	return nil
 }
 
-// notPaying decodes a script's refusal of a Hold that isn't PAYING: 'NOT_FOUND' or
-// {'NOT_PAYING', state}. It is nil for any other result.
-func notPaying(result any) error {
+// refusal decodes a Hold script's refusal, 'NOT_FOUND' or {'WRONG_STATE', state}, for an
+// operation that needs the Hold in state want. It is nil for any other result.
+func refusal(result any, want HoldState) error {
 	if result == "NOT_FOUND" {
 		return ErrHoldNotFound
 	}
-	if r, ok := result.([]any); ok && len(r) == 2 && r[0] == "NOT_PAYING" {
-		return &NotPayingError{State: HoldState(fmt.Sprint(r[1]))}
+	if r, ok := result.([]any); ok && len(r) == 2 && r[0] == "WRONG_STATE" {
+		return &WrongStateError{Want: want, Got: HoldState(fmt.Sprint(r[1]))}
 	}
 	return nil
 }

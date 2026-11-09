@@ -4,7 +4,7 @@
 -- KEYS[1] = the Flash Sale's counts hash
 -- KEYS[2] = the Flash Sale's Holds hash (see reserve.lua)
 -- ARGV[1] = the Hold's ID
--- Returns 'OK' (sold now or already), or why not: 'NOT_FOUND', or {'NOT_PAYING', <state>}.
+-- Returns 'OK' (sold now or already), or why not: 'NOT_FOUND', or {'WRONG_STATE', <state>}.
 local id = ARGV[1]
 local state = redis.call('HGET', KEYS[2], id .. ':state')
 if not state then
@@ -14,7 +14,7 @@ if state == 'SOLD' then
   return 'OK'
 end
 if state ~= 'PAYING' then
-  return {'NOT_PAYING', state}
+  return {'WRONG_STATE', state}
 end
 redis.call('HSET', KEYS[2], id .. ':state', 'SOLD')
 redis.call('HINCRBY', KEYS[1], 'paying', -1)
