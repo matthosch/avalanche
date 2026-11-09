@@ -4,6 +4,7 @@ package inventory
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"strconv"
@@ -37,13 +38,10 @@ func New(rdb redis.UniversalClient) *Inventory {
 
 // load sets up a Flash Sale's counts unless they already exist, so stock is loaded once
 // however many times Load runs.
-var load = redis.NewScript(`
-if redis.call('EXISTS', KEYS[1]) == 1 then
-  return 0
-end
-redis.call('HSET', KEYS[1], 'available', ARGV[1], 'held', 0, 'paying', 0, 'sold', 0)
-return 1
-`)
+//
+//go:embed scripts/load.lua
+var loadSrc string
+var load = redis.NewScript(loadSrc)
 
 // Load puts units of stock into Redis for a Flash Sale going LIVE. Loading a Flash Sale that
 // is already loaded changes nothing.
