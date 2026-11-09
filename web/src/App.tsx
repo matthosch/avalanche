@@ -31,7 +31,9 @@ export function App() {
   const [shopperId, setShopperId] = useState<string | null>(storedShopperId);
   const [holdAttempts, setHoldAttempts] = useState<Record<string, HoldAttempt>>({});
 
-  const reserve = async (shopper: string, flashSaleId: string) => {
+  /** Reserves a unit, or on an ENDED Flash Sale (where no new Hold can be made) finds the
+   * Shopper's existing Hold: either way the API hands back the Hold they already have. */
+  const reserve = async (shopper: string, flashSaleId: string, ended: boolean) => {
     const setAttempt = (attempt: HoldAttempt) => setHoldAttempts((a) => ({ ...a, [flashSaleId]: attempt }));
     setAttempt({ status: "reserving" });
     try {
@@ -43,6 +45,7 @@ export function App() {
       const hold = data ?? error?.hold;
       if (hold) setAttempt({ status: "held", hold });
       // Only a 409 has a typed body; anything else (a 500's plain text) has no reason.
+      else if (ended && error?.reason === "NOT_LIVE") setAttempt({ status: "refused", message: "You have no Hold on this Flash Sale." });
       else setAttempt({ status: "refused", message: (error && refusalMessages[error.reason]) || "Reserve failed." });
     } catch (err: unknown) {
       setAttempt({ status: "refused", message: `Reserve failed: ${String(err)}` });
@@ -106,11 +109,13 @@ export function App() {
                 <time dateTime={flashSale.startsAt}>{timeFormat.format(new Date(flashSale.startsAt))}</time> –{" "}
                 <time dateTime={flashSale.endsAt}>{timeFormat.format(new Date(flashSale.endsAt))}</time>
               </p>
-              {/* A Hold made before the end may still be paid until it expires, so it outlives LIVE. */}
-              {(flashSale.status === "LIVE" || holdAttempts[flashSale.id]?.status === "held") && shopperId && (
+              {/* A Hold made before the end may still be paid until it expires, so an ENDED
+                  Flash Sale lets the Shopper find theirs, and a Hold outlives its LIVE sale. */}
+              {shopperId && (flashSale.status === "LIVE" || flashSale.status === "ENDED") && (
                 <ReserveControl
+                  ended={flashSale.status === "ENDED"}
                   attempt={holdAttempts[flashSale.id]}
-                  onReserve={() => void reserve(shopperId, flashSale.id)}
+                  onReserve={() => void reserve(shopperId, flashSale.id, flashSale.status === "ENDED")}
                 />
               )}
             </li>
@@ -121,8 +126,17 @@ export function App() {
   );
 }
 
-/** The Reserve button for a LIVE Flash Sale, replaced by the Shopper's Hold once they have one. */
-function ReserveControl({ attempt, onReserve }: { attempt: HoldAttempt | undefined; onReserve: () => void }) {
+/** The Reserve button for a LIVE Flash Sale (Show my Hold once it has ENDED), replaced by the
+ * Shopper's Hold once they have one. */
+function ReserveControl({
+  ended,
+  attempt,
+  onReserve,
+}: {
+  ended: boolean;
+  attempt: HoldAttempt | undefined;
+  onReserve: () => void;
+}) {
   if (attempt?.status === "held") {
     const { hold } = attempt;
     return (
@@ -135,7 +149,7 @@ function ReserveControl({ attempt, onReserve }: { attempt: HoldAttempt | undefin
   return (
     <div className="reserve">
       <button type="button" onClick={onReserve} disabled={attempt?.status === "reserving"}>
-        {attempt?.status === "reserving" ? "Reserving…" : "Reserve"}
+        {attempt?.status === "reserving" ? (ended ? "Looking…" : "Reserving…") : ended ? "Show my Hold" : "Reserve"}
       </button>
       {attempt?.status === "refused" && <p role="alert">{attempt.message}</p>}
     </div>

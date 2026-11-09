@@ -346,17 +346,19 @@ func TestShopperRacingThemselvesGetsOneHold(t *testing.T) {
 
 	var (
 		mu   sync.Mutex
-		seen = map[uuid.UUID]int{} // Hold ID -> attempts that got it, as a Hold or as already holding
+		seen = map[inventory.Hold]int{} // Hold -> attempts that got it, as a Hold or as already holding
 	)
 	tally := race(t, attempts, func(int) error {
 		hold, err := inv.Reserve(ctx, flashSale, shopper)
 		var holding *inventory.AlreadyHoldingError
 		if errors.As(err, &holding) {
 			hold = holding.Hold
+		} else if err != nil {
+			return err
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		seen[hold.ID]++
+		seen[hold]++
 		return err
 	})
 
@@ -365,7 +367,7 @@ func TestShopperRacingThemselvesGetsOneHold(t *testing.T) {
 		t.Errorf("outcomes = %v, want %v", tally, want)
 	}
 	if len(seen) != 1 {
-		t.Errorf("attempts saw %d different Holds, want every one to see the same Hold: %v", len(seen), seen)
+		t.Errorf("attempts saw %d different Holds, want all to see one Hold: %v", len(seen), seen)
 	}
 	counts, err := inv.Counts(ctx, flashSale)
 	if err != nil {
@@ -404,5 +406,45 @@ func TestFlashSalesRacingAtOnceKeepSeparateCounts(t *testing.T) {
 		if want := (inventory.Counts{Held: units}); counts != want {
 			t.Errorf("counts(%s) = %+v, want %+v", flashSale, counts, want)
 		}
+	}
+}
+
+func TestShopperGetsTheirHoldBackAfterTheFlashSaleEnds(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	now, err := inv.Now(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flashSale := uuid.Must(uuid.NewV7())
+	endsAt := now.Add(300 * time.Millisecond)
+	if err := inv.Load(ctx, flashSale, 10, endsAt); err != nil {
+		t.Fatal(err)
+	}
+	shopper := uuid.Must(uuid.NewV7())
+	first, err := inv.Reserve(ctx, flashSale, shopper)
+	if err != nil {
+		t.Fatalf("reserve while live: %v", err)
+	}
+	for {
+		if now, err = inv.Now(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !now.Before(endsAt) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// A Hold made before the end can still be paid until it expires, so a Shopper who reloads
+	// or lost the first reply after the end still gets it back.
+	_, err = inv.Reserve(ctx, flashSale, shopper)
+	var holding *inventory.AlreadyHoldingError
+	if !errors.As(err, &holding) || holding.Hold != first {
+		t.Errorf("reserve after the end: err = %v, want already holding %+v", err, first)
+	}
+	// Anyone without a Hold is still refused.
+	if _, err := inv.Reserve(ctx, flashSale, uuid.Must(uuid.NewV7())); !errors.Is(err, inventory.ErrNotLive) {
+		t.Errorf("new Shopper after the end: err = %v, want ErrNotLive", err)
 	}
 }
