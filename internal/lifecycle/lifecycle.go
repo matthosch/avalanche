@@ -43,7 +43,7 @@ func Advance(ctx context.Context, db commerce.Querier, inv *inventory.Inventory)
 }
 
 func goLive(ctx context.Context, db commerce.Querier, inv *inventory.Inventory, flashSale commerce.DueToGoLive) error {
-	if err := inv.Load(ctx, flashSale.ID, flashSale.Units); err != nil {
+	if err := inv.Load(ctx, flashSale.ID, flashSale.Units, flashSale.EndsAt); err != nil {
 		return err
 	}
 	if err := commerce.MarkLive(ctx, db, flashSale.ID); err != nil {

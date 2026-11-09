@@ -86,14 +86,15 @@ func ListFlashSales(ctx context.Context, q Querier) ([]FlashSale, error) {
 
 // DueToGoLive is a SCHEDULED Flash Sale whose start time has passed.
 type DueToGoLive struct {
-	ID    uuid.UUID
-	Units int
+	ID     uuid.UUID
+	Units  int
+	EndsAt time.Time
 }
 
 // ListDueToGoLive returns the SCHEDULED Flash Sales whose start time is at or before now.
 func ListDueToGoLive(ctx context.Context, q Querier, now time.Time) ([]DueToGoLive, error) {
 	rows, err := q.Query(ctx, `
-		SELECT id, units FROM flash_sales
+		SELECT id, units, ends_at FROM flash_sales
 		WHERE status = $1 AND starts_at <= $2
 		ORDER BY starts_at, id`, Scheduled, now)
 	if err != nil {

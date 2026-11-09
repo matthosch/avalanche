@@ -21,6 +21,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
+         * @description Later requests identify the Shopper by sending this ID in the `X-Shopper-Id` header.
+         */
+        post: operations["signIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/flash-sales/{flashSaleId}/holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve one unit of a LIVE Flash Sale, getting a Hold back. */
+        post: operations["reserve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -58,9 +95,38 @@ export interface components {
          * @enum {string}
          */
         FlashSaleStatus: "SCHEDULED" | "LIVE" | "ENDED" | "CLOSED";
+        /** @description A Shopper's temporary claim on one unit of a Flash Sale, which either becomes an Order or is released. */
+        Hold: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            flashSaleId: string;
+            state: components["schemas"]["HoldState"];
+            /**
+             * Format: date-time
+             * @description When the Hold window closes.
+             */
+            expiresAt: string;
+        };
+        /**
+         * @description Where a Hold is in its life, HELD → PAYING → SOLD, or RELEASED.
+         * @enum {string}
+         */
+        HoldState: "HELD" | "PAYING" | "SOLD" | "RELEASED";
+        ReserveRefusal: {
+            /**
+             * @description SOLD_OUT: no units are available right now (released Holds may put some back). ALREADY_HOLDING: the Shopper already has a HELD, PAYING or SOLD Hold on this Flash Sale. NOT_LIVE: the Flash Sale hasn't started or has ended.
+             * @enum {string}
+             */
+            reason: "SOLD_OUT" | "ALREADY_HOLDING" | "NOT_LIVE";
+            hold?: components["schemas"]["Hold"];
+        };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /** @description The Shopper ID issued by sign-in. */
+        ShopperId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -85,6 +151,63 @@ export interface operations {
                     "application/json": {
                         flashSales: components["schemas"]["FlashSale"][];
                     };
+                };
+            };
+        };
+    };
+    signIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new Shopper's ID. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        shopperId: string;
+                    };
+                };
+            };
+        };
+    };
+    reserve: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Shopper ID issued by sign-in. */
+                "X-Shopper-Id": components["parameters"]["ShopperId"];
+            };
+            path: {
+                flashSaleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Shopper's new Hold. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Hold"];
+                };
+            };
+            /** @description No new Hold. The reason says why; for ALREADY_HOLDING, `hold` is the Shopper's existing Hold. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReserveRefusal"];
                 };
             };
         };
