@@ -9,9 +9,9 @@ vars:
 
 tasks:
   infra:up:
-    desc: Start Redis and Postgres (commerce + ledger) and wait until healthy.
+    desc: Start Redis, Postgres (commerce + ledger) and the payments mock (rebuilt if changed), and wait until healthy.
     cmds:
-      - "{{.COMPOSE}} up -d --wait"
+      - "{{.COMPOSE}} up -d --wait --build"
 
   infra:down:
     desc: Stop the infrastructure (keeps data volumes).

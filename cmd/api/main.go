@@ -15,9 +15,11 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/matthosch/avalanche/internal/api"
+	"github.com/matthosch/avalanche/internal/checkout"
 	"github.com/matthosch/avalanche/internal/commerce"
 	"github.com/matthosch/avalanche/internal/config"
 	"github.com/matthosch/avalanche/internal/inventory"
+	"github.com/matthosch/avalanche/internal/payments"
 )
 
 func main() {
@@ -31,6 +33,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	feeBPS, err := config.FeeBPS()
+	if err != nil {
+		return err
+	}
 	pool, err := pgxpool.New(ctx, config.CommerceDatabaseURL())
 	if err != nil {
 		return err
@@ -47,8 +53,11 @@ func run() error {
 	rdb := redis.NewClient(opts)
 	defer rdb.Close()
 
+	inv := inventory.New(rdb)
+	checkouts := checkout.New(pool, inv, payments.NewStripeClient(config.PaymentsURL(), config.PaymentsSecretKey()), feeBPS)
+
 	addr := config.Env("API_ADDR", ":8080")
-	srv := &http.Server{Addr: addr, Handler: api.NewHandler(pool, inventory.New(rdb)), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: api.NewHandler(pool, inv, checkouts), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -58,6 +58,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/holds/{holdId}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pay for a HELD Hold with a test payment method, getting the Order back.
+         * @description Only the Hold's own Shopper may pay for it. The body names the Hold's Flash Sale, as given on the Hold, since each Flash Sale's Holds are kept together with its stock.
+         */
+        post: operations["pay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -120,6 +140,41 @@ export interface components {
              */
             reason: "SOLD_OUT" | "ALREADY_HOLDING" | "NOT_LIVE";
             hold?: components["schemas"]["Hold"];
+        };
+        PayRequest: {
+            /**
+             * Format: uuid
+             * @description The Flash Sale the Hold is on.
+             */
+            flashSaleId: string;
+            /**
+             * @description A test payment method; card data never reaches our servers.
+             * @enum {string}
+             */
+            paymentMethod: "pm_card_visa";
+        };
+        PayRefusal: {
+            /**
+             * @description NOT_HELD: the Hold is already PAYING or SOLD, or was RELEASED.
+             * @enum {string}
+             */
+            reason: "NOT_HELD";
+            state: components["schemas"]["HoldState"];
+        };
+        /** @description The record of a Shopper's completed purchase, created when a Hold is sold. */
+        Order: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            holdId: string;
+            /** Format: uuid */
+            flashSaleId: string;
+            /** Format: int64 */
+            amountCents: number;
+            /** @enum {string} */
+            currency: "USD";
+            /** Format: date-time */
+            createdAt: string;
         };
     };
     responses: never;
@@ -208,6 +263,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReserveRefusal"];
+                };
+            };
+        };
+    };
+    pay: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Shopper ID issued by sign-in. */
+                "X-Shopper-Id": components["parameters"]["ShopperId"];
+            };
+            path: {
+                holdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayRequest"];
+            };
+        };
+        responses: {
+            /** @description The payment succeeded; the Shopper's new Order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            /** @description The payment method isn't one this API accepts. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Shopper has no such Hold on that Flash Sale. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Hold isn't HELD, so it can't be paid for; `state` says where it is. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayRefusal"];
                 };
             };
         };

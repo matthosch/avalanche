@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type FlashSale, type Hold, type ReserveRefusalReason } from "./api/client";
+import { api, type FlashSale, type Hold, type Order, type ReserveRefusalReason } from "./api/client";
 import { signIn, signOut, storedShopperId } from "./shopper";
 
 const priceFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -14,10 +14,11 @@ type State =
   | { status: "error"; message: string }
   | { status: "ready"; flashSales: FlashSale[] };
 
-/** Where the Shopper's attempt to get a Hold on a Flash Sale stands. */
+/** Where the Shopper's attempt to get a Hold on a Flash Sale, and then to pay for it, stands. */
 type HoldAttempt =
   | { status: "reserving" }
-  | { status: "held"; hold: Hold }
+  | { status: "held"; hold: Hold; paying?: boolean; payError?: string }
+  | { status: "ordered"; hold: Hold; order: Order }
   | { status: "refused"; message: string };
 
 const refusalMessages: Record<ReserveRefusalReason, string> = {
@@ -49,6 +50,24 @@ export function App() {
       else setAttempt({ status: "refused", message: (error && refusalMessages[error.reason]) || "Reserve failed." });
     } catch (err: unknown) {
       setAttempt({ status: "refused", message: `Reserve failed: ${String(err)}` });
+    }
+  };
+
+  /** Pays for a HELD Hold with the test card; the payment succeeding makes it an Order. */
+  const pay = async (shopper: string, hold: Hold) => {
+    const setAttempt = (attempt: HoldAttempt) => setHoldAttempts((a) => ({ ...a, [hold.flashSaleId]: attempt }));
+    setAttempt({ status: "held", hold, paying: true });
+    try {
+      const { data, error, response } = await api.POST("/holds/{holdId}/pay", {
+        params: { path: { holdId: hold.id }, header: { "X-Shopper-Id": shopper } },
+        body: { flashSaleId: hold.flashSaleId, paymentMethod: "pm_card_visa" },
+      });
+      if (data) setAttempt({ status: "ordered", hold: { ...hold, state: "SOLD" }, order: data });
+      // A 409 says where the Hold is now, such as SOLD after a payment whose reply was lost.
+      else if (error) setAttempt({ status: "held", hold: { ...hold, state: error.state } });
+      else setAttempt({ status: "held", hold, payError: `Payment failed (${response.status}).` });
+    } catch (err: unknown) {
+      setAttempt({ status: "held", hold, payError: `Payment failed: ${String(err)}` });
     }
   };
 
@@ -116,6 +135,7 @@ export function App() {
                   ended={flashSale.status === "ENDED"}
                   attempt={holdAttempts[flashSale.id]}
                   onReserve={() => void reserve(shopperId, flashSale.id, flashSale.status === "ENDED")}
+                  onPay={(hold) => void pay(shopperId, hold)}
                 />
               )}
             </li>
@@ -127,23 +147,54 @@ export function App() {
 }
 
 /** The Reserve button for a LIVE Flash Sale (Show my Hold once it has ENDED), replaced by the
- * Shopper's Hold once they have one. */
+ * Shopper's Hold once they have one, with a Pay button while it is HELD, and finally by their
+ * Order confirmation. */
 function ReserveControl({
   ended,
   attempt,
   onReserve,
+  onPay,
 }: {
   ended: boolean;
   attempt: HoldAttempt | undefined;
   onReserve: () => void;
+  onPay: (hold: Hold) => void;
 }) {
+  if (attempt?.status === "ordered") {
+    const { order } = attempt;
+    return (
+      <div className="order" role="status">
+        <p>
+          <span className="status status-live">SOLD</span> Order confirmed
+        </p>
+        <p className="order-detail">
+          {priceFormat.format(order.amountCents / 100)} paid · Order <code>{order.id.slice(-8)}</code>
+        </p>
+      </div>
+    );
+  }
   if (attempt?.status === "held") {
     const { hold } = attempt;
+    if (hold.state === "SOLD") {
+      return (
+        <p className="hold" role="status">
+          <span className="status status-live">SOLD</span> You bought this.
+        </p>
+      );
+    }
     return (
-      <p className="hold" role="status">
-        <span className="status status-live">{hold.state}</span> Hold until{" "}
-        <time dateTime={hold.expiresAt}>{holdTimeFormat.format(new Date(hold.expiresAt))}</time>
-      </p>
+      <div className="hold-pay">
+        <p className="hold" role="status">
+          <span className="status status-live">{hold.state}</span> Hold until{" "}
+          <time dateTime={hold.expiresAt}>{holdTimeFormat.format(new Date(hold.expiresAt))}</time>
+        </p>
+        {hold.state === "HELD" && (
+          <button type="button" onClick={() => onPay(hold)} disabled={attempt.paying}>
+            {attempt.paying ? "Paying…" : "Pay with test card"}
+          </button>
+        )}
+        {attempt.payError && <p role="alert">{attempt.payError}</p>}
+      </div>
     );
   }
   return (

@@ -19,13 +19,13 @@ import (
 
 // Defines values for FlashSaleCurrency.
 const (
-	USD FlashSaleCurrency = "USD"
+	FlashSaleCurrencyUSD FlashSaleCurrency = "USD"
 )
 
 // Valid indicates whether the value is a known member of the FlashSaleCurrency enum.
 func (e FlashSaleCurrency) Valid() bool {
 	switch e {
-	case USD:
+	case FlashSaleCurrencyUSD:
 		return true
 	default:
 		return false
@@ -74,6 +74,51 @@ func (e HoldState) Valid() bool {
 	case RELEASED:
 		return true
 	case SOLD:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OrderCurrency.
+const (
+	OrderCurrencyUSD OrderCurrency = "USD"
+)
+
+// Valid indicates whether the value is a known member of the OrderCurrency enum.
+func (e OrderCurrency) Valid() bool {
+	switch e {
+	case OrderCurrencyUSD:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PayRefusalReason.
+const (
+	NOTHELD PayRefusalReason = "NOT_HELD"
+)
+
+// Valid indicates whether the value is a known member of the PayRefusalReason enum.
+func (e PayRefusalReason) Valid() bool {
+	switch e {
+	case NOTHELD:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PayRequestPaymentMethod.
+const (
+	PmCardVisa PayRequestPaymentMethod = "pm_card_visa"
+)
+
+// Valid indicates whether the value is a known member of the PayRequestPaymentMethod enum.
+func (e PayRequestPaymentMethod) Valid() bool {
+	switch e {
+	case PmCardVisa:
 		return true
 	default:
 		return false
@@ -139,6 +184,43 @@ type Hold struct {
 // HoldState Where a Hold is in its life, HELD → PAYING → SOLD, or RELEASED.
 type HoldState string
 
+// Order The record of a Shopper's completed purchase, created when a Hold is sold.
+type Order struct {
+	AmountCents int64              `json:"amountCents"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	Currency    OrderCurrency      `json:"currency"`
+	FlashSaleId openapi_types.UUID `json:"flashSaleId"`
+	HoldId      openapi_types.UUID `json:"holdId"`
+	Id          openapi_types.UUID `json:"id"`
+}
+
+// OrderCurrency defines model for Order.Currency.
+type OrderCurrency string
+
+// PayRefusal defines model for PayRefusal.
+type PayRefusal struct {
+	// Reason NOT_HELD: the Hold is already PAYING or SOLD, or was RELEASED.
+	Reason PayRefusalReason `json:"reason"`
+
+	// State Where a Hold is in its life, HELD → PAYING → SOLD, or RELEASED.
+	State HoldState `json:"state"`
+}
+
+// PayRefusalReason NOT_HELD: the Hold is already PAYING or SOLD, or was RELEASED.
+type PayRefusalReason string
+
+// PayRequest defines model for PayRequest.
+type PayRequest struct {
+	// FlashSaleId The Flash Sale the Hold is on.
+	FlashSaleId openapi_types.UUID `json:"flashSaleId"`
+
+	// PaymentMethod A test payment method; card data never reaches our servers.
+	PaymentMethod PayRequestPaymentMethod `json:"paymentMethod"`
+}
+
+// PayRequestPaymentMethod A test payment method; card data never reaches our servers.
+type PayRequestPaymentMethod string
+
 // ReserveRefusal defines model for ReserveRefusal.
 type ReserveRefusal struct {
 	// Hold A Shopper's temporary claim on one unit of a Flash Sale, which either becomes an Order or is released.
@@ -166,6 +248,15 @@ type ReserveParams struct {
 	XShopperId ShopperId `json:"X-Shopper-Id"`
 }
 
+// PayParams defines parameters for Pay.
+type PayParams struct {
+	// XShopperId The Shopper ID issued by sign-in.
+	XShopperId ShopperId `json:"X-Shopper-Id"`
+}
+
+// PayJSONRequestBody defines body for Pay for application/json ContentType.
+type PayJSONRequestBody = PayRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListFlashSales List Flash Sales across all Stores, soonest start first.
@@ -174,6 +265,9 @@ type ServerInterface interface {
 	// Reserve Reserve one unit of a LIVE Flash Sale, getting a Hold back.
 	// (POST /flash-sales/{flashSaleId}/holds)
 	Reserve(w http.ResponseWriter, r *http.Request, flashSaleId openapi_types.UUID, params ReserveParams)
+	// Pay Pay for a HELD Hold with a test payment method, getting the Order back.
+	// (POST /holds/{holdId}/pay)
+	Pay(w http.ResponseWriter, r *http.Request, holdId openapi_types.UUID, params PayParams)
 	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
 	// (POST /sign-in)
 	SignIn(w http.ResponseWriter, r *http.Request)
@@ -247,6 +341,60 @@ func (siw *ServerInterfaceWrapper) Reserve(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Reserve(w, r, flashSaleId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Pay operation middleware
+func (siw *ServerInterfaceWrapper) Pay(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "holdId" -------------
+	var holdId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "holdId", r.PathValue("holdId"), &holdId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "holdId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PayParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Shopper-Id" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Shopper-Id")]; found {
+		var XShopperId ShopperId
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Shopper-Id", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Shopper-Id", valueList[0], &XShopperId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: "uuid"})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Shopper-Id", Err: err})
+			return
+		}
+
+		params.XShopperId = XShopperId
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Shopper-Id is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Shopper-Id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Pay(w, r, holdId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -393,6 +541,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/flash-sales", wrapper.ListFlashSales)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/sign-in", wrapper.SignIn)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/flash-sales/{flashSaleId}/holds", wrapper.Reserve)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/holds/{holdId}/pay", wrapper.Pay)
 
 	return m
 }
@@ -457,6 +606,60 @@ func (response Reserve409JSONResponse) VisitReserveResponse(w http.ResponseWrite
 	return err
 }
 
+type PayRequestObject struct {
+	HoldId openapi_types.UUID `json:"holdId"`
+	Params PayParams
+	Body   *PayJSONRequestBody
+}
+
+type PayResponseObject interface {
+	VisitPayResponse(w http.ResponseWriter) error
+}
+
+type Pay200JSONResponse Order
+
+func (response Pay200JSONResponse) VisitPayResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Pay400Response struct {
+}
+
+func (response Pay400Response) VisitPayResponse(w http.ResponseWriter) error {
+	w.WriteHeader(400)
+	return nil
+}
+
+type Pay404Response struct {
+}
+
+func (response Pay404Response) VisitPayResponse(w http.ResponseWriter) error {
+	w.WriteHeader(404)
+	return nil
+}
+
+type Pay409JSONResponse PayRefusal
+
+func (response Pay409JSONResponse) VisitPayResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SignInRequestObject struct {
 }
 
@@ -488,6 +691,9 @@ type StrictServerInterface interface {
 	// Reserve Reserve one unit of a LIVE Flash Sale, getting a Hold back.
 	// (POST /flash-sales/{flashSaleId}/holds)
 	Reserve(ctx context.Context, request ReserveRequestObject) (ReserveResponseObject, error)
+	// Pay Pay for a HELD Hold with a test payment method, getting the Order back.
+	// (POST /holds/{holdId}/pay)
+	Pay(ctx context.Context, request PayRequestObject) (PayResponseObject, error)
 	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
 	// (POST /sign-in)
 	SignIn(ctx context.Context, request SignInRequestObject) (SignInResponseObject, error)
@@ -576,6 +782,40 @@ func (sh *strictHandler) Reserve(w http.ResponseWriter, r *http.Request, flashSa
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ReserveResponseObject); ok {
 		if err := validResponse.VisitReserveResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// Pay operation middleware
+func (sh *strictHandler) Pay(w http.ResponseWriter, r *http.Request, holdId openapi_types.UUID, params PayParams) {
+	var request PayRequestObject
+
+	request.HoldId = holdId
+	request.Params = params
+
+	var body PayJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.Pay(ctx, request.(PayRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "Pay")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PayResponseObject); ok {
+		if err := validResponse.VisitPayResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

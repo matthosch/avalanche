@@ -33,6 +33,19 @@ services:
       timeout: 2s
       retries: 15
 
+  # The Stripe-compatible payment provider (ADR-0007), on stripe-mock's usual port.
+  payments-mock:
+    build:
+      context: ..
+      dockerfile: infra/payments-mock.Dockerfile
+    ports:
+      - "12111:12111"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:12111/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
 volumes:
   redis-data:
   postgres-data:
