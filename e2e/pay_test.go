@@ -63,6 +63,10 @@ func TestShopperPaysForAHoldAndGetsAnOrder(t *testing.T) {
 	}
 
 	// One Order and one OrderCompleted outbox row for the Hold, and the Hold is SOLD.
+	// These queries read commerce tables, which spec #1 keeps tests away from, because #5 asks
+	// this test to find the Order and outbox row and nothing public shows them yet. Once #6's
+	// relay and ledger exist, the outbox query gives way to the Store balance and Fee revenue
+	// read through api; the Order count, to an Orders = Journal Entries invariant.
 	var orders, outboxRows int
 	var paymentIntentID string
 	if err := pool.QueryRow(ctx, `SELECT count(*), min(payment_intent_id) FROM orders WHERE hold_id = $1`, hold.Id).Scan(&orders, &paymentIntentID); err != nil {
