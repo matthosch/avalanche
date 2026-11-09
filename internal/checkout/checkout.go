@@ -77,13 +77,15 @@ func (c *Checkout) Pay(ctx context.Context, shopperID, flashSaleID, holdID uuid.
 	}
 
 	// Keyed by the Hold, so a create that is sent again gets the first PaymentIntent back,
-	// never a second one (ADR-0007).
+	// never a second one (ADR-0007). The metadata names the Hold and its Flash Sale, which is
+	// all a payment webhook needs to find the Hold.
 	create := &stripe.PaymentIntentCreateParams{
 		Amount:   stripe.Int64(flashSale.PriceCents),
 		Currency: stripe.String(strings.ToLower(flashSale.Currency)),
 	}
 	create.SetIdempotencyKey(holdID.String())
 	create.AddMetadata("hold_id", holdID.String())
+	create.AddMetadata("flash_sale_id", flashSaleID.String())
 	intent, err := c.payments.V1PaymentIntents.Create(ctx, create)
 	if err != nil {
 		return commerce.Order{}, fmt.Errorf("checkout: create payment intent for hold %s: %w", holdID, err)

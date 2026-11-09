@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"testing"
 	"time"
@@ -83,13 +84,15 @@ func TestShopperPaysForAHoldAndGetsAnOrder(t *testing.T) {
 		t.Errorf("Aurora units remaining = %s, want 499", showUnits(unitsLeft))
 	}
 
-	// The payment provider charged the PaymentIntent the Order records, tagged with the Hold.
+	// The payment provider charged the PaymentIntent the Order records, tagged with the Hold and
+	// its Flash Sale, so a payment webhook can find the Hold from the PaymentIntent alone.
 	intent, err := paymentsClient().V1PaymentIntents.Retrieve(ctx, paymentIntentID, nil)
 	if err != nil {
 		t.Fatalf("retrieve payment intent %q: %v", paymentIntentID, err)
 	}
-	if intent.Status != stripe.PaymentIntentStatusSucceeded || intent.Amount != 12900 || intent.Metadata["hold_id"] != hold.Id.String() {
-		t.Errorf("payment intent = %s %d %v, want succeeded 12900 with hold_id %s", intent.Status, intent.Amount, intent.Metadata, hold.Id)
+	wantMetadata := map[string]string{"hold_id": hold.Id.String(), "flash_sale_id": aurora.Id.String()}
+	if intent.Status != stripe.PaymentIntentStatusSucceeded || intent.Amount != 12900 || !maps.Equal(intent.Metadata, wantMetadata) {
+		t.Errorf("payment intent = %s %d %v, want succeeded 12900 with metadata %v", intent.Status, intent.Amount, intent.Metadata, wantMetadata)
 	}
 
 	// A SOLD Hold can't be paid for again.
@@ -139,11 +142,12 @@ func TestPaymentsMockHonorsIdempotencyKey(t *testing.T) {
 // pay pays for hold as shopper with a test payment method and returns the status and raw body.
 func pay(t *testing.T, hold gen.Hold, shopper uuid.UUID, paymentMethod string) (int, []byte) {
 	t.Helper()
-	reqBody, err := json.Marshal(gen.PayJSONRequestBody{FlashSaleId: hold.FlashSaleId, PaymentMethod: gen.PayRequestPaymentMethod(paymentMethod)})
+	reqBody, err := json.Marshal(gen.PayJSONRequestBody{PaymentMethod: gen.PayRequestPaymentMethod(paymentMethod)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequest(http.MethodPost, apiURL()+"/api/holds/"+hold.Id.String()+"/pay", bytes.NewReader(reqBody))
+	url := apiURL() + "/api/flash-sales/" + hold.FlashSaleId.String() + "/holds/" + hold.Id.String() + "/pay"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		t.Fatal(err)
 	}

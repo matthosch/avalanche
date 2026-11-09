@@ -211,9 +211,6 @@ type PayRefusalReason string
 
 // PayRequest defines model for PayRequest.
 type PayRequest struct {
-	// FlashSaleId The Flash Sale the Hold is on.
-	FlashSaleId openapi_types.UUID `json:"flashSaleId"`
-
 	// PaymentMethod A test payment method; card data never reaches our servers.
 	PaymentMethod PayRequestPaymentMethod `json:"paymentMethod"`
 }
@@ -266,8 +263,8 @@ type ServerInterface interface {
 	// (POST /flash-sales/{flashSaleId}/holds)
 	Reserve(w http.ResponseWriter, r *http.Request, flashSaleId openapi_types.UUID, params ReserveParams)
 	// Pay Pay for a HELD Hold with a test payment method, getting the Order back.
-	// (POST /holds/{holdId}/pay)
-	Pay(w http.ResponseWriter, r *http.Request, holdId openapi_types.UUID, params PayParams)
+	// (POST /flash-sales/{flashSaleId}/holds/{holdId}/pay)
+	Pay(w http.ResponseWriter, r *http.Request, flashSaleId openapi_types.UUID, holdId openapi_types.UUID, params PayParams)
 	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
 	// (POST /sign-in)
 	SignIn(w http.ResponseWriter, r *http.Request)
@@ -356,6 +353,15 @@ func (siw *ServerInterfaceWrapper) Pay(w http.ResponseWriter, r *http.Request) {
 	var err error
 	_ = err
 
+	// ------------- Path parameter "flashSaleId" -------------
+	var flashSaleId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "flashSaleId", r.PathValue("flashSaleId"), &flashSaleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "flashSaleId", Err: err})
+		return
+	}
+
 	// ------------- Path parameter "holdId" -------------
 	var holdId openapi_types.UUID
 
@@ -394,7 +400,7 @@ func (siw *ServerInterfaceWrapper) Pay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.Pay(w, r, holdId, params)
+		siw.Handler.Pay(w, r, flashSaleId, holdId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -541,7 +547,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/flash-sales", wrapper.ListFlashSales)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/sign-in", wrapper.SignIn)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/flash-sales/{flashSaleId}/holds", wrapper.Reserve)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/holds/{holdId}/pay", wrapper.Pay)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/flash-sales/{flashSaleId}/holds/{holdId}/pay", wrapper.Pay)
 
 	return m
 }
@@ -607,9 +613,10 @@ func (response Reserve409JSONResponse) VisitReserveResponse(w http.ResponseWrite
 }
 
 type PayRequestObject struct {
-	HoldId openapi_types.UUID `json:"holdId"`
-	Params PayParams
-	Body   *PayJSONRequestBody
+	FlashSaleId openapi_types.UUID `json:"flashSaleId"`
+	HoldId      openapi_types.UUID `json:"holdId"`
+	Params      PayParams
+	Body        *PayJSONRequestBody
 }
 
 type PayResponseObject interface {
@@ -692,7 +699,7 @@ type StrictServerInterface interface {
 	// (POST /flash-sales/{flashSaleId}/holds)
 	Reserve(ctx context.Context, request ReserveRequestObject) (ReserveResponseObject, error)
 	// Pay Pay for a HELD Hold with a test payment method, getting the Order back.
-	// (POST /holds/{holdId}/pay)
+	// (POST /flash-sales/{flashSaleId}/holds/{holdId}/pay)
 	Pay(ctx context.Context, request PayRequestObject) (PayResponseObject, error)
 	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
 	// (POST /sign-in)
@@ -790,9 +797,10 @@ func (sh *strictHandler) Reserve(w http.ResponseWriter, r *http.Request, flashSa
 }
 
 // Pay operation middleware
-func (sh *strictHandler) Pay(w http.ResponseWriter, r *http.Request, holdId openapi_types.UUID, params PayParams) {
+func (sh *strictHandler) Pay(w http.ResponseWriter, r *http.Request, flashSaleId openapi_types.UUID, holdId openapi_types.UUID, params PayParams) {
 	var request PayRequestObject
 
+	request.FlashSaleId = flashSaleId
 	request.HoldId = holdId
 	request.Params = params
 

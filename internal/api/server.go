@@ -139,7 +139,7 @@ func (s *server) Pay(ctx context.Context, request gen.PayRequestObject) (gen.Pay
 	if !request.Body.PaymentMethod.Valid() {
 		return gen.Pay400Response{}, nil
 	}
-	order, err := s.checkout.Pay(ctx, request.Params.XShopperId, request.Body.FlashSaleId, request.HoldId, string(request.Body.PaymentMethod))
+	order, err := s.checkout.Pay(ctx, request.Params.XShopperId, request.FlashSaleId, request.HoldId, string(request.Body.PaymentMethod))
 	if errors.Is(err, checkout.ErrHoldNotFound) {
 		return gen.Pay404Response{}, nil
 	}

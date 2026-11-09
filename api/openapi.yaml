@@ -65,14 +65,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReserveRefusal"
-  /holds/{holdId}/pay:
+  /flash-sales/{flashSaleId}/holds/{holdId}/pay:
     post:
       operationId: pay
       summary: Pay for a HELD Hold with a test payment method, getting the Order back.
-      description: >-
-        Only the Hold's own Shopper may pay for it. The body names the Hold's Flash Sale, as
-        given on the Hold, since each Flash Sale's Holds are kept together with its stock.
+      description: Only the Hold's own Shopper may pay for it.
       parameters:
+        - name: flashSaleId
+          in: path
+          required: true
+          description: The Flash Sale the Hold is on, as given on the Hold.
+          schema:
+            type: string
+            format: uuid
         - name: holdId
           in: path
           required: true
@@ -199,12 +204,8 @@ components:
           $ref: "#/components/schemas/Hold"
     PayRequest:
       type: object
-      required: [flashSaleId, paymentMethod]
+      required: [paymentMethod]
       properties:
-        flashSaleId:
-          type: string
-          format: uuid
-          description: The Flash Sale the Hold is on.
         paymentMethod:
           type: string
           description: A test payment method; card data never reaches our servers.

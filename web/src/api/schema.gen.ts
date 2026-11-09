@@ -58,7 +58,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/holds/{holdId}/pay": {
+    "/flash-sales/{flashSaleId}/holds/{holdId}/pay": {
         parameters: {
             query?: never;
             header?: never;
@@ -69,7 +69,7 @@ export interface paths {
         put?: never;
         /**
          * Pay for a HELD Hold with a test payment method, getting the Order back.
-         * @description Only the Hold's own Shopper may pay for it. The body names the Hold's Flash Sale, as given on the Hold, since each Flash Sale's Holds are kept together with its stock.
+         * @description Only the Hold's own Shopper may pay for it.
          */
         post: operations["pay"];
         delete?: never;
@@ -142,11 +142,6 @@ export interface components {
             hold?: components["schemas"]["Hold"];
         };
         PayRequest: {
-            /**
-             * Format: uuid
-             * @description The Flash Sale the Hold is on.
-             */
-            flashSaleId: string;
             /**
              * @description A test payment method; card data never reaches our servers.
              * @enum {string}
@@ -275,6 +270,8 @@ export interface operations {
                 "X-Shopper-Id": components["parameters"]["ShopperId"];
             };
             path: {
+                /** @description The Flash Sale the Hold is on, as given on the Hold. */
+                flashSaleId: string;
                 holdId: string;
             };
             cookie?: never;

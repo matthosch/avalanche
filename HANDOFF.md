@@ -34,7 +34,7 @@ The system is a **funnel**: 100k reserve attempts → 500 Holds → ~450 payment
 10. **Live dashboard:** `api` reads `orders.completed` as a second consumer group and pushes updates over SSE. Balances come from the ledger.
 11. **At-least-once consumers:** each Journal Entry stores its unique `event_id` in the same transaction as its Postings; `XACK` after commit; dead-letter after **5** deliveries.
 12. **Redis durability:** AOF `everysec`. Reconciliation (every 30 s while LIVE, and once at Close-out) checks Redis sold count = Orders = Journal Entries and republishes anything missing.
-13. **Checkout idempotency:** `POST /holds/{id}/pay` takes an `Idempotency-Key` header, scoped to `(shopper_id, key)` and stored in commerce Postgres (key, request hash, status, saved response), kept 24h. Same key + same body → replay the saved response; different body → 422; still in progress → 409.
+13. **Checkout idempotency:** `POST /flash-sales/{flash_sale_id}/holds/{id}/pay` takes an `Idempotency-Key` header, scoped to `(shopper_id, key)` and stored in commerce Postgres (key, request hash, status, saved response), kept 24h. Same key + same body → replay the saved response; different body → 422; still in progress → 409.
 14. **IDs:** UUIDv7 everywhere. Postgres 18 `DEFAULT uuidv7()`; Hold IDs are generated in Go (`uuid.NewV7()`), since Holds are born in Redis.
 
 ## Stripe-compatible mock (`cmd/payments-mock`)

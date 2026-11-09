@@ -58,9 +58,9 @@ export function App() {
     const setAttempt = (attempt: HoldAttempt) => setHoldAttempts((a) => ({ ...a, [hold.flashSaleId]: attempt }));
     setAttempt({ status: "held", hold, paying: true });
     try {
-      const { data, error, response } = await api.POST("/holds/{holdId}/pay", {
-        params: { path: { holdId: hold.id }, header: { "X-Shopper-Id": shopper } },
-        body: { flashSaleId: hold.flashSaleId, paymentMethod: "pm_card_visa" },
+      const { data, error, response } = await api.POST("/flash-sales/{flashSaleId}/holds/{holdId}/pay", {
+        params: { path: { flashSaleId: hold.flashSaleId, holdId: hold.id }, header: { "X-Shopper-Id": shopper } },
+        body: { paymentMethod: "pm_card_visa" },
       });
       if (data) setAttempt({ status: "ordered", hold: { ...hold, state: "SOLD" }, order: data });
       // A 409 says where the Hold is now, such as SOLD after a payment whose reply was lost.
