@@ -4,6 +4,7 @@
   --muted: #6b6b66;
   --card: #ffffff;
   --border: #e3e3df;
+  --live: #1a7f37;
   color-scheme: light dark;
   font-family: system-ui, sans-serif;
 }
@@ -14,6 +15,7 @@
     --muted: #9a9a94;
     --card: #20201e;
     --border: #33332f;
+    --live: #3fb950;
   }
 }
 body { margin: 0; background: var(--bg); color: var(--fg); }
@@ -23,3 +25,6 @@ main { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
 .flash-sale h2 { margin: 4px 0 8px; font-size: 1.1rem; }
 .store, .schedule { margin: 0; color: var(--muted); font-size: 0.875rem; }
 .price { margin: 0 0 4px; font-variant-numeric: tabular-nums; }
+.store { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.status { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; border: 1px solid currentColor; border-radius: 999px; padding: 1px 8px; }
+.status-live { color: var(--live); }

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log/slog"
 	"os"
 	"time"
@@ -14,6 +15,9 @@ import (
 )
 
 func main() {
+	ago := flag.Duration("ago", 0, "schedule the demo set as if seeded this long ago (e.g. 26m puts Flash Sales in every state)")
+	flag.Parse()
+
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, config.CommerceDatabaseURL())
 	if err != nil {
@@ -21,9 +25,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
-	if err := seed.Run(ctx, pool, time.Now().UTC().Truncate(time.Second)); err != nil {
+	if err := seed.Run(ctx, pool, time.Now().UTC().Truncate(time.Second).Add(-*ago)); err != nil {
 		slog.Error("seed", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("seeded commerce")
+	slog.Info("seeded commerce", "ago", *ago)
 }

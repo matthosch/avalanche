@@ -1,5 +1,8 @@
 version: "3"
 
+# Prefix every line with its task's name, so parallel tasks (task dev) say which one failed.
+output: prefixed
+
 vars:
   COMPOSE: docker compose -f infra/docker-compose.yml
   GENERATED: internal/api/gen web/src/api/schema.gen.ts
@@ -44,18 +47,29 @@ tasks:
       - 'test -z "$(git ls-files --others --exclude-standard -- {{.GENERATED}})" || (echo "new generated files are not tracked: run task gen and commit" && exit 1)'
 
   seed:
-    desc: Reset commerce to the demo Stores and Flash Sales.
+    desc: "Reset commerce to the demo Stores and Flash Sales. Schedule them in the past with: task seed -- -ago 26m"
     cmds:
-      - go run ./cmd/seed
+      - go run ./cmd/seed {{.CLI_ARGS}}
 
   dev:
-    desc: Run api and the web app together (needs infra:up).
-    deps: [dev:api, dev:web]
+    desc: Start the infrastructure, then run api, worker and the web app together.
+    cmds:
+      - task: infra:up
+      - task: dev:services
+
+  dev:services:
+    internal: true
+    deps: [dev:api, dev:worker, dev:web]
 
   dev:api:
     desc: Run api on :8080.
     cmds:
       - go run ./cmd/api
+
+  dev:worker:
+    desc: Run worker, which moves Flash Sales LIVE and ENDED on schedule.
+    cmds:
+      - go run ./cmd/worker
 
   dev:web:
     desc: Run the web app on :5173, proxying /api to api.
@@ -72,11 +86,11 @@ tasks:
       - pnpm --dir web typecheck
 
   test:
-    desc: Run Go unit and integration tests.
+    desc: Run Go unit and integration tests (integration tests start their own containers; needs Docker).
     cmds:
       - go test ./...
 
   test:e2e:
-    desc: Run end-to-end tests against the running stack (needs infra:up and dev:api).
+    desc: Run end-to-end tests against the running stack (needs infra:up, dev:api and dev:worker).
     cmds:
       - go test -tags e2e -count=1 ./e2e

@@ -1,14 +1,15 @@
 //go:build e2e
 
 // Package e2e drives the running stack from outside, through api's public HTTP endpoints
-// (the system-boundary seam in spec #1). Run with `task test:e2e` while `task infra:up` and
-// `task dev:api` are running. Tests re-seed commerce, so they reset its demo data.
+// (the system-boundary seam in spec #1). Run with `task test:e2e` while `task infra:up`,
+// `task dev:api` and `task dev:worker` are running. Tests re-seed commerce, so they reset its demo data.
 package e2e
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,21 +33,10 @@ func TestShopperSeesSeededFlashSales(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	res, err := http.Get(config.Env("API_URL", "http://localhost:8080") + "/api/flash-sales")
-	if err != nil {
-		t.Fatalf("list flash sales: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", res.StatusCode)
-	}
-	var body gen.ListFlashSales200JSONResponse
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
+	flashSales := listFlashSales(t)
 
 	stores := map[string]bool{}
-	for _, flashSale := range body.FlashSales {
+	for _, flashSale := range flashSales {
 		stores[flashSale.Store.Name] = true
 	}
 	if len(stores) < 3 {
@@ -55,7 +45,7 @@ func TestShopperSeesSeededFlashSales(t *testing.T) {
 
 	// A known seeded Flash Sale, checked field by field.
 	var found bool
-	for _, flashSale := range body.FlashSales {
+	for _, flashSale := range flashSales {
 		if flashSale.ProductName != "Aurora Trail Runner" {
 			continue
 		}
@@ -71,12 +61,103 @@ func TestShopperSeesSeededFlashSales(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("seeded Flash Sale %q not listed; got %d Flash Sales", "Aurora Trail Runner", len(body.FlashSales))
+		t.Fatalf("seeded Flash Sale %q not listed; got %d Flash Sales", "Aurora Trail Runner", len(flashSales))
 	}
 
-	for i := 1; i < len(body.FlashSales); i++ {
-		if body.FlashSales[i].StartsAt.Before(body.FlashSales[i-1].StartsAt) {
+	for i := 1; i < len(flashSales); i++ {
+		if flashSales[i].StartsAt.Before(flashSales[i-1].StartsAt) {
 			t.Errorf("Flash Sales not ordered by start time at index %d", i)
 		}
 	}
+}
+
+func TestFlashSalesGoLiveAndEndOnSchedule(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, config.CommerceDatabaseURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	// Seeding 26 minutes in the past puts the demo set in every state at once:
+	// Aurora runs now-24m…now+6m, Ridgeline starts in 19m, Halo and the Box Set ended a minute ago.
+	if err := seed.Run(ctx, pool, time.Now().UTC().Truncate(time.Second).Add(-26*time.Minute)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	units := func(n int32) *int32 { return &n }
+	wants := map[string]shown{
+		"Aurora Trail Runner":          {gen.LIVE, units(500)},
+		"Ridgeline Daypack":            {gen.SCHEDULED, nil},
+		"Halo Wireless Headphones":     {gen.ENDED, nil},
+		"Signed First Edition Box Set": {gen.ENDED, nil},
+	}
+
+	// The worker moves Flash Sales on its own tick, so poll until it has caught up.
+	var got map[string]shown
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		got = map[string]shown{}
+		for _, flashSale := range listFlashSales(t) {
+			got[flashSale.ProductName] = shown{flashSale.Status, flashSale.UnitsRemaining}
+		}
+		if matches(got, wants) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	for product, w := range wants {
+		g, ok := got[product]
+		if !ok {
+			t.Errorf("%s: not listed", product)
+			continue
+		}
+		if !g.equal(w) {
+			t.Errorf("%s: status %s, units remaining %s; want %s, %s",
+				product, g.status, showUnits(g.unitsRemaining), w.status, showUnits(w.unitsRemaining))
+		}
+	}
+}
+
+func listFlashSales(t *testing.T) []gen.FlashSale {
+	t.Helper()
+	res, err := http.Get(config.Env("API_URL", "http://localhost:8080") + "/api/flash-sales")
+	if err != nil {
+		t.Fatalf("list flash sales: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	var body gen.ListFlashSales200JSONResponse
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.FlashSales
+}
+
+// shown is what the listing tells a Shopper about a Flash Sale's progress.
+type shown struct {
+	status         gen.FlashSaleStatus
+	unitsRemaining *int32
+}
+
+func (s shown) equal(o shown) bool {
+	a, b := s.unitsRemaining, o.unitsRemaining
+	return s.status == o.status && ((a == nil && b == nil) || (a != nil && b != nil && *a == *b))
+}
+
+func matches(got, wants map[string]shown) bool {
+	for product, w := range wants {
+		if g, ok := got[product]; !ok || !g.equal(w) {
+			return false
+		}
+	}
+	return true
+}
+
+func showUnits(n *int32) string {
+	if n == nil {
+		return "absent"
+	}
+	return strconv.Itoa(int(*n))
 }

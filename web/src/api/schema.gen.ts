@@ -46,7 +46,18 @@ export interface components {
             startsAt: string;
             /** Format: date-time */
             endsAt: string;
+            status: components["schemas"]["FlashSaleStatus"];
+            /**
+             * Format: int32
+             * @description Units not yet held or sold. Present only while the Flash Sale is LIVE.
+             */
+            unitsRemaining?: number;
         };
+        /**
+         * @description Where a Flash Sale is in its lifecycle, SCHEDULED → LIVE → ENDED → CLOSED.
+         * @enum {string}
+         */
+        FlashSaleStatus: "SCHEDULED" | "LIVE" | "ENDED" | "CLOSED";
     };
     responses: never;
     parameters: never;
