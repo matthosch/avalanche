@@ -1,10 +1,12 @@
-// Package commerce owns the commerce Postgres database: Stores, Flash Sales and,
-// later, Orders and the outbox.
+// Package commerce owns the commerce Postgres database: Stores, Flash Sales, Orders and the
+// outbox.
 package commerce
 
 import (
 	"context"
 	"embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"time"
@@ -16,6 +18,8 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
+
+	"github.com/matthosch/avalanche/internal/events"
 )
 
 //go:embed migrations/*.sql
@@ -67,21 +71,48 @@ type FlashSale struct {
 	Status      Status
 }
 
+// flashSaleColumns are the columns scanFlashSale reads, from flash_sales fs joined to stores s.
+const flashSaleColumns = `fs.id, s.id, s.name, fs.product_name, fs.price_cents, fs.currency, fs.units, fs.starts_at, fs.ends_at, fs.status`
+
+func scanFlashSale(r pgx.CollectableRow) (FlashSale, error) {
+	var flashSale FlashSale
+	err := r.Scan(&flashSale.ID, &flashSale.StoreID, &flashSale.StoreName, &flashSale.ProductName,
+		&flashSale.PriceCents, &flashSale.Currency, &flashSale.Units, &flashSale.StartsAt, &flashSale.EndsAt, &flashSale.Status)
+	return flashSale, err
+}
+
 // ListFlashSales returns every Flash Sale, soonest start first.
 func ListFlashSales(ctx context.Context, q Querier) ([]FlashSale, error) {
 	rows, err := q.Query(ctx, `
-		SELECT fs.id, s.id, s.name, fs.product_name, fs.price_cents, fs.currency, fs.units, fs.starts_at, fs.ends_at, fs.status
+		SELECT `+flashSaleColumns+`
 		FROM flash_sales fs JOIN stores s ON s.id = fs.store_id
 		ORDER BY fs.starts_at, fs.id`)
 	if err != nil {
 		return nil, fmt.Errorf("list flash sales: %w", err)
 	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (FlashSale, error) {
-		var flashSale FlashSale
-		err := r.Scan(&flashSale.ID, &flashSale.StoreID, &flashSale.StoreName, &flashSale.ProductName,
-			&flashSale.PriceCents, &flashSale.Currency, &flashSale.Units, &flashSale.StartsAt, &flashSale.EndsAt, &flashSale.Status)
-		return flashSale, err
-	})
+	return pgx.CollectRows(rows, scanFlashSale)
+}
+
+// ErrFlashSaleNotFound means there is no Flash Sale with that ID.
+var ErrFlashSaleNotFound = errors.New("commerce: flash sale not found")
+
+// GetFlashSale returns one Flash Sale, or ErrFlashSaleNotFound.
+func GetFlashSale(ctx context.Context, q Querier, id uuid.UUID) (FlashSale, error) {
+	rows, err := q.Query(ctx, `
+		SELECT `+flashSaleColumns+`
+		FROM flash_sales fs JOIN stores s ON s.id = fs.store_id
+		WHERE fs.id = $1`, id)
+	if err != nil {
+		return FlashSale{}, fmt.Errorf("get flash sale %s: %w", id, err)
+	}
+	flashSale, err := pgx.CollectExactlyOneRow(rows, scanFlashSale)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FlashSale{}, ErrFlashSaleNotFound
+	}
+	if err != nil {
+		return FlashSale{}, fmt.Errorf("get flash sale %s: %w", id, err)
+	}
+	return flashSale, nil
 }
 
 // DueToGoLive is a SCHEDULED Flash Sale whose start time has passed.
@@ -118,6 +149,91 @@ func EndDue(ctx context.Context, q Querier, now time.Time) error {
 		return fmt.Errorf("end flash sales: %w", err)
 	}
 	return nil
+}
+
+// Order is the record of a Shopper's completed purchase, created when a Hold is sold.
+type Order struct {
+	ID              uuid.UUID
+	HoldID          uuid.UUID
+	FlashSaleID     uuid.UUID
+	StoreID         uuid.UUID
+	ShopperID       uuid.UUID
+	AmountCents     int64
+	Currency        string
+	PaymentIntentID string
+	CreatedAt       time.Time
+}
+
+// NewOrder is a paid Hold, to be recorded as an Order. FeeBPS is the Platform's Fee rate right
+// now, captured into the Order's OrderCompleted event.
+type NewOrder struct {
+	HoldID          uuid.UUID
+	FlashSaleID     uuid.UUID
+	StoreID         uuid.UUID
+	ShopperID       uuid.UUID
+	AmountCents     int64
+	Currency        string
+	PaymentIntentID string
+	FeeBPS          int
+}
+
+const orderColumns = `id, hold_id, flash_sale_id, store_id, shopper_id, amount_cents, currency, payment_intent_id, created_at`
+
+// RecordOrder writes the Order for a paid Hold and its OrderCompleted outbox row in one
+// transaction (ADR-0003, ADR-0006). A Hold has at most one Order: recording one again, as a
+// later report of the same payment would, writes nothing and returns the first Order.
+func RecordOrder(ctx context.Context, pool *pgxpool.Pool, o NewOrder) (Order, error) {
+	var order Order
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			INSERT INTO orders (hold_id, flash_sale_id, store_id, shopper_id, amount_cents, currency, payment_intent_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (hold_id) DO NOTHING
+			RETURNING `+orderColumns,
+			o.HoldID, o.FlashSaleID, o.StoreID, o.ShopperID, o.AmountCents, o.Currency, o.PaymentIntentID)
+		if err != nil {
+			return err
+		}
+		order, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByPos[Order])
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The Hold already has its Order, and that Order already has its outbox row.
+			rows, err := tx.Query(ctx, `SELECT `+orderColumns+` FROM orders WHERE hold_id = $1`, o.HoldID)
+			if err != nil {
+				return err
+			}
+			order, err = pgx.CollectExactlyOneRow(rows, pgx.RowToStructByPos[Order])
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		eventID, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(events.OrderCompleted{
+			SchemaVersion: events.OrderCompletedSchemaVersion,
+			EventID:       eventID,
+			OrderID:       order.ID,
+			HoldID:        order.HoldID,
+			StoreID:       order.StoreID,
+			FlashSaleID:   order.FlashSaleID,
+			AmountCents:   order.AmountCents,
+			Currency:      order.Currency,
+			FeeBPS:        o.FeeBPS,
+			OccurredAt:    order.CreatedAt.UTC(),
+		})
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO outbox (id, event_type, payload) VALUES ($1, $2, $3)`,
+			eventID, events.OrderCompletedType, payload)
+		return err
+	})
+	if err != nil {
+		return Order{}, fmt.Errorf("record order for hold %s: %w", o.HoldID, err)
+	}
+	return order, nil
 }
 
 func migrationsDir() fs.FS {

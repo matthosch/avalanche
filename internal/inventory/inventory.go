@@ -44,6 +44,26 @@ func (e *AlreadyHoldingError) Error() string {
 
 func (e *AlreadyHoldingError) Is(target error) bool { return target == ErrAlreadyHolding }
 
+// ErrHoldNotFound means there is no such Hold on the Flash Sale for this Shopper. Another
+// Shopper's Hold counts as not found, so only the Hold's own Shopper can pay for it.
+var ErrHoldNotFound = errors.New("inventory: hold not found")
+
+// ErrWrongState means a Hold isn't in the state an operation needs, such as paying for a Hold
+// that has left HELD. It comes as a *WrongStateError.
+var ErrWrongState = errors.New("inventory: hold in wrong state")
+
+// WrongStateError is the refusal of a Hold that isn't in the state an operation needs: Want is
+// that state, Got the Hold's state now. It matches ErrWrongState with errors.Is.
+type WrongStateError struct {
+	Want, Got HoldState
+}
+
+func (e *WrongStateError) Error() string {
+	return fmt.Sprintf("%v: want %s, hold is %s", ErrWrongState, e.Want, e.Got)
+}
+
+func (e *WrongStateError) Is(target error) bool { return target == ErrWrongState }
+
 // refusals maps each reason the reserve script gives for not creating a Hold to its error.
 var refusals = map[string]error{
 	"NOT_LIVE": ErrNotLive,
@@ -77,6 +97,9 @@ type Hold struct {
 	State       HoldState
 	// ExpiresAt is when the Hold window closes, on Redis server time.
 	ExpiresAt time.Time
+	// PaymentIntentID is the payment provider's PaymentIntent for this Hold, once one has
+	// been created; empty before that.
+	PaymentIntentID string
 }
 
 // HoldWindow is how long a Shopper has to pay for a Hold.
@@ -175,6 +198,107 @@ func newHold(id, flashSaleID, shopperID uuid.UUID, state HoldState, expiresAtMs 
 		State:       state,
 		ExpiresAt:   time.UnixMilli(expiresAtMs).UTC(),
 	}
+}
+
+//go:embed scripts/begin_payment.lua
+var beginPaymentSrc string
+var beginPayment = redis.NewScript(beginPaymentSrc)
+
+// BeginPayment moves a Shopper's HELD Hold to PAYING, before the Shopper is charged, so the
+// unit can no longer expire out from under the payment (ADR-0002). A Hold that has left HELD
+// gets a *WrongStateError.
+func (inv *Inventory) BeginPayment(ctx context.Context, flashSaleID, holdID, shopperID uuid.UUID) (Hold, error) {
+	keys := []string{countsKey(flashSaleID), holdsKey(flashSaleID)}
+	result, err := beginPayment.Run(ctx, inv.rdb, keys, holdID.String(), shopperID.String()).Result()
+	if err != nil {
+		return Hold{}, fmt.Errorf("inventory: begin payment %s: %w", holdID, err)
+	}
+	if expiresAt, ok := result.(int64); ok {
+		return newHold(holdID, flashSaleID, shopperID, Paying, expiresAt), nil
+	}
+	if err := refusal(result, Held); err != nil {
+		return Hold{}, err
+	}
+	return Hold{}, fmt.Errorf("inventory: begin payment %s: unexpected result %v", holdID, result)
+}
+
+//go:embed scripts/record_payment_intent.lua
+var recordPaymentIntentSrc string
+var recordPaymentIntent = redis.NewScript(recordPaymentIntentSrc)
+
+// RecordPaymentIntent stores the ID of the PaymentIntent charging a PAYING Hold, so recovery
+// can retrieve it by that ID (ADR-0007). A Hold that isn't PAYING gets a *WrongStateError.
+func (inv *Inventory) RecordPaymentIntent(ctx context.Context, flashSaleID, holdID uuid.UUID, paymentIntentID string) error {
+	result, err := recordPaymentIntent.Run(ctx, inv.rdb, []string{holdsKey(flashSaleID)}, holdID.String(), paymentIntentID).Result()
+	if err != nil {
+		return fmt.Errorf("inventory: record payment intent %s: %w", holdID, err)
+	}
+	if err := refusal(result, Paying); err != nil {
+		return err
+	}
+	if result != "OK" {
+		return fmt.Errorf("inventory: record payment intent %s: unexpected result %v", holdID, result)
+	}
+	return nil
+}
+
+//go:embed scripts/confirm.lua
+var confirmSrc string
+var confirm = redis.NewScript(confirmSrc)
+
+// Confirm moves a PAYING Hold to SOLD. Commerce calls it only after the Hold's Order is
+// written (ADR-0006). It is idempotent: confirming a SOLD Hold again succeeds and changes
+// nothing. A Hold that is neither PAYING nor SOLD gets a *WrongStateError.
+func (inv *Inventory) Confirm(ctx context.Context, flashSaleID, holdID uuid.UUID) error {
+	keys := []string{countsKey(flashSaleID), holdsKey(flashSaleID)}
+	result, err := confirm.Run(ctx, inv.rdb, keys, holdID.String()).Result()
+	if err != nil {
+		return fmt.Errorf("inventory: confirm %s: %w", holdID, err)
+	}
+	if err := refusal(result, Paying); err != nil {
+		return err
+	}
+	if result != "OK" {
+		return fmt.Errorf("inventory: confirm %s: unexpected result %v", holdID, result)
+	}
+	return nil
+}
+
+// refusal decodes a Hold script's refusal, 'NOT_FOUND' or {'WRONG_STATE', state}, for an
+// operation that needs the Hold in state want. It is nil for any other result.
+func refusal(result any, want HoldState) error {
+	if result == "NOT_FOUND" {
+		return ErrHoldNotFound
+	}
+	if r, ok := result.([]any); ok && len(r) == 2 && r[0] == "WRONG_STATE" {
+		return &WrongStateError{Want: want, Got: HoldState(fmt.Sprint(r[1]))}
+	}
+	return nil
+}
+
+// Hold returns one of a Flash Sale's Holds as it is now, or ErrHoldNotFound.
+func (inv *Inventory) Hold(ctx context.Context, flashSaleID, holdID uuid.UUID) (Hold, error) {
+	id := holdID.String()
+	values, err := inv.rdb.HMGet(ctx, holdsKey(flashSaleID), id+":shopper", id+":state", id+":expires_at", id+":payment_intent").Result()
+	if err != nil {
+		return Hold{}, fmt.Errorf("inventory: hold %s: %w", holdID, err)
+	}
+	if values[0] == nil {
+		return Hold{}, ErrHoldNotFound
+	}
+	shopperID, err := uuid.Parse(fmt.Sprint(values[0]))
+	if err != nil {
+		return Hold{}, fmt.Errorf("inventory: hold %s shopper: %w", holdID, err)
+	}
+	expiresAt, err := strconv.ParseInt(fmt.Sprint(values[2]), 10, 64)
+	if err != nil {
+		return Hold{}, fmt.Errorf("inventory: hold %s expiry: %w", holdID, err)
+	}
+	hold := newHold(holdID, flashSaleID, shopperID, HoldState(fmt.Sprint(values[1])), expiresAt)
+	if paymentIntentID, ok := values[3].(string); ok {
+		hold.PaymentIntentID = paymentIntentID
+	}
+	return hold, nil
 }
 
 // Counts returns where a loaded Flash Sale's units are, or ErrNotLoaded.

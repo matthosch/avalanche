@@ -37,14 +37,14 @@ var stores = []struct {
 	}},
 }
 
-// Run migrates commerce, deletes every Store and Flash Sale, and inserts the demo set with
-// schedules relative to now.
+// Run migrates commerce, deletes every Store, Flash Sale, Order and outbox row, and inserts
+// the demo set with schedules relative to now.
 func Run(ctx context.Context, pool *pgxpool.Pool, now time.Time) error {
 	if err := commerce.Migrate(ctx, pool); err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `TRUNCATE flash_sales, stores`); err != nil {
+		if _, err := tx.Exec(ctx, `TRUNCATE outbox, orders, flash_sales, stores`); err != nil {
 			return fmt.Errorf("reset: %w", err)
 		}
 		for _, s := range stores {

@@ -448,3 +448,201 @@ func TestShopperGetsTheirHoldBackAfterTheFlashSaleEnds(t *testing.T) {
 		t.Errorf("new Shopper after the end: err = %v, want ErrNotLive", err)
 	}
 }
+
+// reserveOne reserves a unit of flashSale for a new Shopper and returns the Hold.
+func reserveOne(t *testing.T, inv *inventory.Inventory, flashSale uuid.UUID) inventory.Hold {
+	t.Helper()
+	hold, err := inv.Reserve(context.Background(), flashSale, uuid.Must(uuid.NewV7()))
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	return hold
+}
+
+// wantCounts fails the test unless flashSale's counts are want.
+func wantCounts(t *testing.T, inv *inventory.Inventory, flashSale uuid.UUID, want inventory.Counts) {
+	t.Helper()
+	counts, err := inv.Counts(context.Background(), flashSale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts != want {
+		t.Errorf("counts = %+v, want %+v", counts, want)
+	}
+}
+
+// wantWrongState fails the test unless err refuses a Hold that is in state got where the
+// operation needed want.
+func wantWrongState(t *testing.T, what string, err error, want, got inventory.HoldState) {
+	t.Helper()
+	var wrong *inventory.WrongStateError
+	if !errors.As(err, &wrong) || !errors.Is(err, inventory.ErrWrongState) {
+		t.Errorf("%s: err = %v, want a *WrongStateError", what, err)
+		return
+	}
+	if wrong.Want != want || wrong.Got != got {
+		t.Errorf("%s: wrong state want %s, got %s; expected want %s, got %s", what, wrong.Want, wrong.Got, want, got)
+	}
+}
+
+func TestBeginPaymentMovesTheHoldToPaying(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+
+	paying, err := inv.BeginPayment(ctx, flashSale, hold.ID, hold.ShopperID)
+	if err != nil {
+		t.Fatalf("begin payment: %v", err)
+	}
+
+	want := hold
+	want.State = inventory.Paying
+	if paying != want {
+		t.Errorf("hold = %+v, want %+v", paying, want)
+	}
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Paying: 1})
+}
+
+func TestOnlyTheHoldsShopperCanBeginPayment(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale, other := loadLive(t, inv, 10), loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+
+	for _, attempt := range []struct {
+		name                     string
+		flashSale, hold, shopper uuid.UUID
+	}{
+		{"another Shopper", flashSale, hold.ID, uuid.Must(uuid.NewV7())},
+		{"unknown Hold", flashSale, uuid.Must(uuid.NewV7()), hold.ShopperID},
+		{"another Flash Sale", other, hold.ID, hold.ShopperID},
+	} {
+		if _, err := inv.BeginPayment(ctx, attempt.flashSale, attempt.hold, attempt.shopper); !errors.Is(err, inventory.ErrHoldNotFound) {
+			t.Errorf("%s: err = %v, want ErrHoldNotFound", attempt.name, err)
+		}
+	}
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Held: 1})
+	wantCounts(t, inv, other, inventory.Counts{Available: 10})
+}
+
+func TestBeginPaymentOnlyMovesAHeldHold(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+	if _, err := inv.BeginPayment(ctx, flashSale, hold.ID, hold.ShopperID); err != nil {
+		t.Fatalf("begin payment: %v", err)
+	}
+
+	_, err := inv.BeginPayment(ctx, flashSale, hold.ID, hold.ShopperID)
+	wantWrongState(t, "begin payment again", err, inventory.Held, inventory.Paying)
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Paying: 1})
+}
+
+func TestPayingHoldKeepsItsPaymentIntent(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+	paying, err := inv.BeginPayment(ctx, flashSale, hold.ID, hold.ShopperID)
+	if err != nil {
+		t.Fatalf("begin payment: %v", err)
+	}
+
+	if err := inv.RecordPaymentIntent(ctx, flashSale, hold.ID, "pi_3Q1example"); err != nil {
+		t.Fatalf("record payment intent: %v", err)
+	}
+
+	got, err := inv.Hold(ctx, flashSale, hold.ID)
+	if err != nil {
+		t.Fatalf("hold: %v", err)
+	}
+	want := paying
+	want.PaymentIntentID = "pi_3Q1example"
+	if got != want {
+		t.Errorf("hold = %+v, want %+v", got, want)
+	}
+}
+
+func TestOnlyAPayingHoldTakesAPaymentIntent(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+
+	err := inv.RecordPaymentIntent(ctx, flashSale, hold.ID, "pi_3Q1example")
+	wantWrongState(t, "record on a HELD Hold", err, inventory.Paying, inventory.Held)
+	if err := inv.RecordPaymentIntent(ctx, flashSale, uuid.Must(uuid.NewV7()), "pi_3Q1example"); !errors.Is(err, inventory.ErrHoldNotFound) {
+		t.Errorf("record on an unknown Hold: err = %v, want ErrHoldNotFound", err)
+	}
+	if got, err := inv.Hold(ctx, flashSale, hold.ID); err != nil || got != hold {
+		t.Errorf("hold = %+v, %v; want it unchanged: %+v", got, err, hold)
+	}
+}
+
+func TestLookingUpAnUnknownHold(t *testing.T) {
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+
+	if _, err := inv.Hold(context.Background(), flashSale, uuid.Must(uuid.NewV7())); !errors.Is(err, inventory.ErrHoldNotFound) {
+		t.Errorf("err = %v, want ErrHoldNotFound", err)
+	}
+}
+
+func TestAPaidUnitMovesFromHeldThroughPayingToSold(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Held: 1})
+	if _, err := inv.BeginPayment(ctx, flashSale, hold.ID, hold.ShopperID); err != nil {
+		t.Fatalf("begin payment: %v", err)
+	}
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Paying: 1})
+
+	if err := inv.Confirm(ctx, flashSale, hold.ID); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Sold: 1})
+	if got, err := inv.Hold(ctx, flashSale, hold.ID); err != nil || got.State != inventory.Sold {
+		t.Errorf("hold = %+v, %v; want SOLD", got, err)
+	}
+}
+
+func TestConfirmingASoldHoldAgainChangesNothing(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+	if _, err := inv.BeginPayment(ctx, flashSale, hold.ID, hold.ShopperID); err != nil {
+		t.Fatalf("begin payment: %v", err)
+	}
+	if err := inv.Confirm(ctx, flashSale, hold.ID); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	// The confirm response and the payment webhook can both confirm; the second is a no-op.
+	for range 3 {
+		if err := inv.Confirm(ctx, flashSale, hold.ID); err != nil {
+			t.Errorf("confirm again: %v", err)
+		}
+	}
+
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Sold: 1})
+}
+
+func TestConfirmOnlySellsAPayingHold(t *testing.T) {
+	ctx := context.Background()
+	inv := newInventory(t)
+	flashSale := loadLive(t, inv, 10)
+	hold := reserveOne(t, inv, flashSale)
+
+	err := inv.Confirm(ctx, flashSale, hold.ID)
+	wantWrongState(t, "confirm a HELD Hold", err, inventory.Paying, inventory.Held)
+	if err := inv.Confirm(ctx, flashSale, uuid.Must(uuid.NewV7())); !errors.Is(err, inventory.ErrHoldNotFound) {
+		t.Errorf("confirm an unknown Hold: err = %v, want ErrHoldNotFound", err)
+	}
+	wantCounts(t, inv, flashSale, inventory.Counts{Available: 9, Held: 1})
+}

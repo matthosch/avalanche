@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/matthosch/avalanche/internal/api/gen"
+	"github.com/matthosch/avalanche/internal/checkout"
 	"github.com/matthosch/avalanche/internal/commerce"
 	"github.com/matthosch/avalanche/internal/inventory"
 )
@@ -21,11 +22,12 @@ const BaseURL = "/api"
 type server struct {
 	commerce  *pgxpool.Pool
 	inventory *inventory.Inventory
+	checkout  *checkout.Checkout
 }
 
 // NewHandler returns the HTTP handler for the whole API.
-func NewHandler(commerceDB *pgxpool.Pool, inv *inventory.Inventory) http.Handler {
-	strict := gen.NewStrictHandlerWithOptions(&server{commerce: commerceDB, inventory: inv}, nil,
+func NewHandler(commerceDB *pgxpool.Pool, inv *inventory.Inventory, checkout *checkout.Checkout) http.Handler {
+	strict := gen.NewStrictHandlerWithOptions(&server{commerce: commerceDB, inventory: inv, checkout: checkout}, nil,
 		gen.StrictHTTPServerOptions{ResponseErrorHandlerFunc: internalError})
 	return gen.HandlerWithOptions(strict, gen.StdHTTPServerOptions{BaseURL: BaseURL})
 }
@@ -130,4 +132,30 @@ func toHold(hold inventory.Hold) gen.Hold {
 		State:       gen.HoldState(hold.State),
 		ExpiresAt:   hold.ExpiresAt,
 	}
+}
+
+// Pay charges a Shopper's HELD Hold and hands back the Order it becomes.
+func (s *server) Pay(ctx context.Context, request gen.PayRequestObject) (gen.PayResponseObject, error) {
+	if !request.Body.PaymentMethod.Valid() {
+		return gen.Pay400Response{}, nil
+	}
+	order, err := s.checkout.Pay(ctx, request.Params.XShopperId, request.FlashSaleId, request.HoldId, string(request.Body.PaymentMethod))
+	if errors.Is(err, checkout.ErrHoldNotFound) {
+		return gen.Pay404Response{}, nil
+	}
+	var notHeld *checkout.NotHeldError
+	if errors.As(err, &notHeld) {
+		return gen.Pay409JSONResponse{Reason: gen.NOTHELD, State: gen.HoldState(notHeld.State)}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.Pay200JSONResponse{
+		Id:          order.ID,
+		HoldId:      order.HoldID,
+		FlashSaleId: order.FlashSaleID,
+		AmountCents: order.AmountCents,
+		Currency:    gen.OrderCurrency(order.Currency),
+		CreatedAt:   order.CreatedAt.UTC(),
+	}, nil
 }
