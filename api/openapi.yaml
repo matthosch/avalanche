@@ -23,7 +23,58 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/FlashSale"
+  /sign-in:
+    post:
+      operationId: signIn
+      summary: Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
+      description: Later requests identify the Shopper by sending this ID in the `X-Shopper-Id` header.
+      responses:
+        "200":
+          description: The new Shopper's ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [shopperId]
+                properties:
+                  shopperId:
+                    type: string
+                    format: uuid
+  /flash-sales/{flashSaleId}/holds:
+    post:
+      operationId: reserve
+      summary: Reserve one unit of a LIVE Flash Sale, getting a Hold back.
+      parameters:
+        - name: flashSaleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/ShopperId"
+      responses:
+        "201":
+          description: The Shopper's new Hold.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Hold"
+        "409":
+          description: No Hold. The reason says why.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReserveRefusal"
 components:
+  parameters:
+    ShopperId:
+      name: X-Shopper-Id
+      in: header
+      required: true
+      description: The Shopper ID issued by sign-in.
+      schema:
+        type: string
+        format: uuid
   schemas:
     Store:
       type: object
@@ -74,3 +125,35 @@ components:
       type: string
       description: Where a Flash Sale is in its lifecycle, SCHEDULED → LIVE → ENDED → CLOSED.
       enum: [SCHEDULED, LIVE, ENDED, CLOSED]
+    Hold:
+      type: object
+      description: A Shopper's temporary claim on one unit of a Flash Sale, which either becomes an Order or is released.
+      required: [id, flashSaleId, state, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        flashSaleId:
+          type: string
+          format: uuid
+        state:
+          $ref: "#/components/schemas/HoldState"
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the Hold window closes.
+    HoldState:
+      type: string
+      description: Where a Hold is in its life, HELD → PAYING → SOLD, or RELEASED.
+      enum: [HELD, PAYING, SOLD, RELEASED]
+    ReserveRefusal:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          description: >-
+            SOLD_OUT: no units are available right now (released Holds may put some back).
+            ALREADY_HOLDING: the Shopper already has a HELD, PAYING or SOLD Hold on this Flash Sale.
+            NOT_LIVE: the Flash Sale hasn't started or has ended.
+          enum: [SOLD_OUT, ALREADY_HOLDING, NOT_LIVE]

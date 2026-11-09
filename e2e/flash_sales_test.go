@@ -120,7 +120,7 @@ func TestFlashSalesGoLiveAndEndOnSchedule(t *testing.T) {
 
 func listFlashSales(t *testing.T) []gen.FlashSale {
 	t.Helper()
-	res, err := http.Get(config.Env("API_URL", "http://localhost:8080") + "/api/flash-sales")
+	res, err := http.Get(apiURL() + "/api/flash-sales")
 	if err != nil {
 		t.Fatalf("list flash sales: %v", err)
 	}

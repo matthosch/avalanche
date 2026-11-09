@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
@@ -55,6 +56,51 @@ func (e FlashSaleStatus) Valid() bool {
 	}
 }
 
+// Defines values for HoldState.
+const (
+	HELD     HoldState = "HELD"
+	PAYING   HoldState = "PAYING"
+	RELEASED HoldState = "RELEASED"
+	SOLD     HoldState = "SOLD"
+)
+
+// Valid indicates whether the value is a known member of the HoldState enum.
+func (e HoldState) Valid() bool {
+	switch e {
+	case HELD:
+		return true
+	case PAYING:
+		return true
+	case RELEASED:
+		return true
+	case SOLD:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReserveRefusalReason.
+const (
+	ALREADYHOLDING ReserveRefusalReason = "ALREADY_HOLDING"
+	NOTLIVE        ReserveRefusalReason = "NOT_LIVE"
+	SOLDOUT        ReserveRefusalReason = "SOLD_OUT"
+)
+
+// Valid indicates whether the value is a known member of the ReserveRefusalReason enum.
+func (e ReserveRefusalReason) Valid() bool {
+	switch e {
+	case ALREADYHOLDING:
+		return true
+	case NOTLIVE:
+		return true
+	case SOLDOUT:
+		return true
+	default:
+		return false
+	}
+}
+
 // FlashSale A time-boxed event in which one Store sells a fixed number of units of one product at one price.
 type FlashSale struct {
 	Currency    FlashSaleCurrency  `json:"currency"`
@@ -79,10 +125,42 @@ type FlashSaleCurrency string
 // FlashSaleStatus Where a Flash Sale is in its lifecycle, SCHEDULED → LIVE → ENDED → CLOSED.
 type FlashSaleStatus string
 
+// Hold A Shopper's temporary claim on one unit of a Flash Sale, which either becomes an Order or is released.
+type Hold struct {
+	// ExpiresAt When the Hold window closes.
+	ExpiresAt   time.Time          `json:"expiresAt"`
+	FlashSaleId openapi_types.UUID `json:"flashSaleId"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// State Where a Hold is in its life, HELD → PAYING → SOLD, or RELEASED.
+	State HoldState `json:"state"`
+}
+
+// HoldState Where a Hold is in its life, HELD → PAYING → SOLD, or RELEASED.
+type HoldState string
+
+// ReserveRefusal defines model for ReserveRefusal.
+type ReserveRefusal struct {
+	// Reason SOLD_OUT: no units are available right now (released Holds may put some back). ALREADY_HOLDING: the Shopper already has a HELD, PAYING or SOLD Hold on this Flash Sale. NOT_LIVE: the Flash Sale hasn't started or has ended.
+	Reason ReserveRefusalReason `json:"reason"`
+}
+
+// ReserveRefusalReason SOLD_OUT: no units are available right now (released Holds may put some back). ALREADY_HOLDING: the Shopper already has a HELD, PAYING or SOLD Hold on this Flash Sale. NOT_LIVE: the Flash Sale hasn't started or has ended.
+type ReserveRefusalReason string
+
 // Store defines model for Store.
 type Store struct {
 	Id   openapi_types.UUID `json:"id"`
 	Name string             `json:"name"`
+}
+
+// ShopperId defines model for ShopperId.
+type ShopperId = openapi_types.UUID
+
+// ReserveParams defines parameters for Reserve.
+type ReserveParams struct {
+	// XShopperId The Shopper ID issued by sign-in.
+	XShopperId ShopperId `json:"X-Shopper-Id"`
 }
 
 // ServerInterface represents all server handlers.
@@ -90,6 +168,12 @@ type ServerInterface interface {
 	// ListFlashSales List Flash Sales across all Stores, soonest start first.
 	// (GET /flash-sales)
 	ListFlashSales(w http.ResponseWriter, r *http.Request)
+	// Reserve Reserve one unit of a LIVE Flash Sale, getting a Hold back.
+	// (POST /flash-sales/{flashSaleId}/holds)
+	Reserve(w http.ResponseWriter, r *http.Request, flashSaleId openapi_types.UUID, params ReserveParams)
+	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
+	// (POST /sign-in)
+	SignIn(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -106,6 +190,74 @@ func (siw *ServerInterfaceWrapper) ListFlashSales(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListFlashSales(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Reserve operation middleware
+func (siw *ServerInterfaceWrapper) Reserve(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "flashSaleId" -------------
+	var flashSaleId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "flashSaleId", r.PathValue("flashSaleId"), &flashSaleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "flashSaleId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ReserveParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Shopper-Id" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Shopper-Id")]; found {
+		var XShopperId ShopperId
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Shopper-Id", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Shopper-Id", valueList[0], &XShopperId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: "uuid"})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Shopper-Id", Err: err})
+			return
+		}
+
+		params.XShopperId = XShopperId
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Shopper-Id is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Shopper-Id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Reserve(w, r, flashSaleId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SignIn operation middleware
+func (siw *ServerInterfaceWrapper) SignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SignIn(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -236,6 +388,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/flash-sales", wrapper.ListFlashSales)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/sign-in", wrapper.SignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/flash-sales/{flashSaleId}/holds", wrapper.Reserve)
 
 	return m
 }
@@ -263,11 +417,77 @@ func (response ListFlashSales200JSONResponse) VisitListFlashSalesResponse(w http
 	return err
 }
 
+type ReserveRequestObject struct {
+	FlashSaleId openapi_types.UUID `json:"flashSaleId"`
+	Params      ReserveParams
+}
+
+type ReserveResponseObject interface {
+	VisitReserveResponse(w http.ResponseWriter) error
+}
+
+type Reserve201JSONResponse Hold
+
+func (response Reserve201JSONResponse) VisitReserveResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Reserve409JSONResponse ReserveRefusal
+
+func (response Reserve409JSONResponse) VisitReserveResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignInRequestObject struct {
+}
+
+type SignInResponseObject interface {
+	VisitSignInResponse(w http.ResponseWriter) error
+}
+
+type SignIn200JSONResponse struct {
+	ShopperId openapi_types.UUID `json:"shopperId"`
+}
+
+func (response SignIn200JSONResponse) VisitSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// ListFlashSales List Flash Sales across all Stores, soonest start first.
 	// (GET /flash-sales)
 	ListFlashSales(ctx context.Context, request ListFlashSalesRequestObject) (ListFlashSalesResponseObject, error)
+	// Reserve Reserve one unit of a LIVE Flash Sale, getting a Hold back.
+	// (POST /flash-sales/{flashSaleId}/holds)
+	Reserve(ctx context.Context, request ReserveRequestObject) (ReserveResponseObject, error)
+	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
+	// (POST /sign-in)
+	SignIn(ctx context.Context, request SignInRequestObject) (SignInResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -326,6 +546,57 @@ func (sh *strictHandler) ListFlashSales(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListFlashSalesResponseObject); ok {
 		if err := validResponse.VisitListFlashSalesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// Reserve operation middleware
+func (sh *strictHandler) Reserve(w http.ResponseWriter, r *http.Request, flashSaleId openapi_types.UUID, params ReserveParams) {
+	var request ReserveRequestObject
+
+	request.FlashSaleId = flashSaleId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.Reserve(ctx, request.(ReserveRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "Reserve")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReserveResponseObject); ok {
+		if err := validResponse.VisitReserveResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SignIn operation middleware
+func (sh *strictHandler) SignIn(w http.ResponseWriter, r *http.Request) {
+	var request SignInRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SignIn(ctx, request.(SignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SignInResponseObject); ok {
+		if err := validResponse.VisitSignInResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

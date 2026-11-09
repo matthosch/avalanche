@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/matthosch/avalanche/internal/api/gen"
@@ -73,4 +74,44 @@ func (s *server) unitsRemaining(ctx context.Context, flashSale commerce.FlashSal
 	}
 	remaining := int32(counts.Available)
 	return &remaining, nil
+}
+
+// SignIn is the stub sign-in: no password, just a new Platform-wide Shopper ID that the
+// Shopper sends with later requests.
+func (s *server) SignIn(context.Context, gen.SignInRequestObject) (gen.SignInResponseObject, error) {
+	shopperID, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
+	return gen.SignIn200JSONResponse{ShopperId: shopperID}, nil
+}
+
+// reserveRefusals is the reason given to the Shopper for each way the inventory refuses a Hold.
+var reserveRefusals = []struct {
+	err    error
+	reason gen.ReserveRefusalReason
+}{
+	{inventory.ErrSoldOut, gen.SOLDOUT},
+	{inventory.ErrAlreadyHolding, gen.ALREADYHOLDING},
+	{inventory.ErrNotLive, gen.NOTLIVE},
+}
+
+// Reserve is the hot path. It touches only Redis: whether the Flash Sale is LIVE is the
+// inventory's call, never Postgres's (ADR-0001).
+func (s *server) Reserve(ctx context.Context, request gen.ReserveRequestObject) (gen.ReserveResponseObject, error) {
+	hold, err := s.inventory.Reserve(ctx, request.FlashSaleId, request.Params.XShopperId)
+	for _, refusal := range reserveRefusals {
+		if errors.Is(err, refusal.err) {
+			return gen.Reserve409JSONResponse{Reason: refusal.reason}, nil
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.Reserve201JSONResponse{
+		Id:          hold.ID,
+		FlashSaleId: hold.FlashSaleID,
+		State:       gen.HoldState(hold.State),
+		ExpiresAt:   hold.ExpiresAt,
+	}, nil
 }
