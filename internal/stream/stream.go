@@ -44,7 +44,8 @@ type HandleOrderCompleted func(ctx context.Context, event events.OrderCompleted)
 const (
 	// readBlock is how long a read waits for new messages before checking ctx again.
 	readBlock = 2 * time.Second
-	// retryEvery is how often this consumer's unacknowledged messages are handled again.
+	// retryEvery is how often unacknowledged messages are claimed and handled again; a message
+	// is claimed once it has been pending at least this long.
 	retryEvery = 5 * time.Second
 	readCount  = 100
 )
@@ -52,39 +53,50 @@ const (
 // Consume reads OrdersCompleted as consumer in group until ctx is done, creating the group
 // (from the start of the stream) if it doesn't exist. Delivery is at-least-once: a message is
 // acknowledged (XACK) only after handle returns nil, so a crash or a failed handle leaves it
-// pending, and it is handled again, on start and every few seconds after.
+// pending. Every few seconds the consumer claims (XAUTOCLAIM) the group's messages that have
+// been pending a while, whichever consumer read them, so a message read by a consumer that
+// has since gone away under another name is still handled.
+//
+// A message that keeps failing is retried without limit for now; moving it to a dead-letter
+// stream after 5 deliveries (ADR-0003) is #16.
 func Consume(ctx context.Context, rdb *redis.Client, group, consumer string, handle HandleOrderCompleted) error {
 	err := rdb.XGroupCreateMkStream(ctx, OrdersCompleted, group, "0").Err()
 	if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
 		return fmt.Errorf("stream: create group %s on %s: %w", group, OrdersCompleted, err)
 	}
-	var lastRetry time.Time // zero, so pending messages from before a restart go first
+	log := slog.With("stream", OrdersCompleted, "group", group)
+	var lastRetry time.Time // zero, so messages left pending before a restart go first
 	for ctx.Err() == nil {
-		// "0" reads this consumer's pending messages; ">" reads new ones.
-		id, block := ">", readBlock
+		var messages []redis.XMessage
 		if time.Since(lastRetry) >= retryEvery {
-			id, block, lastRetry = "0", -1, time.Now()
+			lastRetry = time.Now()
+			messages, _, err = rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+				Stream: OrdersCompleted, Group: group, Consumer: consumer, MinIdle: retryEvery, Start: "0-0", Count: readCount,
+			}).Result()
+		} else {
+			var streams []redis.XStream
+			streams, err = rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+				Group: group, Consumer: consumer, Streams: []string{OrdersCompleted, ">"}, Count: readCount, Block: readBlock,
+			}).Result()
+			for _, s := range streams {
+				messages = append(messages, s.Messages...)
+			}
 		}
-		streams, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
-			Group: group, Consumer: consumer, Streams: []string{OrdersCompleted, id}, Count: readCount, Block: block,
-		}).Result()
 		if errors.Is(err, redis.Nil) || ctx.Err() != nil {
 			continue
 		}
 		if err != nil {
-			slog.ErrorContext(ctx, "read stream", "stream", OrdersCompleted, "group", group, "err", err)
+			log.ErrorContext(ctx, "read stream", "err", err)
 			sleep(ctx, time.Second)
 			continue
 		}
-		for _, s := range streams {
-			for _, message := range s.Messages {
-				if err := handleMessage(ctx, message, handle); err != nil {
-					slog.ErrorContext(ctx, "handle stream message; left pending", "stream", OrdersCompleted, "group", group, "message_id", message.ID, "err", err)
-					continue
-				}
-				if err := rdb.XAck(ctx, OrdersCompleted, group, message.ID).Err(); err != nil {
-					slog.ErrorContext(ctx, "ack stream message", "stream", OrdersCompleted, "group", group, "message_id", message.ID, "err", err)
-				}
+		for _, message := range messages {
+			if err := handleMessage(ctx, message, handle); err != nil {
+				log.ErrorContext(ctx, "handle stream message; left pending", "message_id", message.ID, "err", err)
+				continue
+			}
+			if err := rdb.XAck(ctx, OrdersCompleted, group, message.ID).Err(); err != nil {
+				log.ErrorContext(ctx, "ack stream message", "message_id", message.ID, "err", err)
 			}
 		}
 	}

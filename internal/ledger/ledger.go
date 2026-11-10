@@ -86,6 +86,11 @@ func (l *Ledger) Ingest(ctx context.Context, event events.OrderCompleted) error 
 // they sum to zero and refuses them otherwise, with ErrUnbalanced. A Journal Entry is booked
 // once per event: posting one for an EventID that already has one writes nothing.
 func (l *Ledger) Post(ctx context.Context, entry JournalEntry) error {
+	if len(entry.Postings) == 0 {
+		// The database checks the sum as Postings arrive, so a Journal Entry with none would
+		// slip past it and use up the event.
+		return fmt.Errorf("ledger: journal entry for event %s has no postings", entry.EventID)
+	}
 	err := pgx.BeginFunc(ctx, l.db, func(tx pgx.Tx) error {
 		var journalEntryID uuid.UUID
 		err := tx.QueryRow(ctx, `
@@ -109,7 +114,7 @@ func (l *Ledger) Post(ctx context.Context, entry JournalEntry) error {
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.ConstraintName == "postings_balance" {
-		return ErrUnbalanced
+		return fmt.Errorf("%w: event %s", ErrUnbalanced, entry.EventID)
 	}
 	if err != nil {
 		return fmt.Errorf("ledger: post journal entry for event %s: %w", entry.EventID, err)
