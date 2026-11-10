@@ -78,6 +78,12 @@ tasks:
     cmds:
       - pnpm dev
 
+  readme:gifs:
+    desc: Redraw the README's animated diagrams into docs/media.
+    dir: tools/readme-gifs
+    cmds:
+      - go run . -out ../../docs/media
+
   typecheck:
     desc: Typecheck Go (including e2e) and the web app.
     cmds:
