@@ -1,3 +1,6 @@
 # Every checkout uses LF, whatever core.autocrlf says, so generated code,
 # lockfiles and Task checksums match across machines.
 * text=auto eol=lf
+
+# Generated animations; never touch line endings.
+*.gif binary
