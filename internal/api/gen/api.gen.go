@@ -17,6 +17,21 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for FeeRevenueCurrency.
+const (
+	FeeRevenueCurrencyUSD FeeRevenueCurrency = "USD"
+)
+
+// Valid indicates whether the value is a known member of the FeeRevenueCurrency enum.
+func (e FeeRevenueCurrency) Valid() bool {
+	switch e {
+	case FeeRevenueCurrencyUSD:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FlashSaleCurrency.
 const (
 	FlashSaleCurrencyUSD FlashSaleCurrency = "USD"
@@ -146,6 +161,30 @@ func (e ReserveRefusalReason) Valid() bool {
 	}
 }
 
+// Defines values for StoreBalanceCurrency.
+const (
+	StoreBalanceCurrencyUSD StoreBalanceCurrency = "USD"
+)
+
+// Valid indicates whether the value is a known member of the StoreBalanceCurrency enum.
+func (e StoreBalanceCurrency) Valid() bool {
+	switch e {
+	case StoreBalanceCurrencyUSD:
+		return true
+	default:
+		return false
+	}
+}
+
+// FeeRevenue defines model for FeeRevenue.
+type FeeRevenue struct {
+	Currency        FeeRevenueCurrency `json:"currency"`
+	FeeRevenueCents int64              `json:"feeRevenueCents"`
+}
+
+// FeeRevenueCurrency defines model for FeeRevenue.Currency.
+type FeeRevenueCurrency string
+
 // FlashSale A time-boxed event in which one Store sells a fixed number of units of one product at one price.
 type FlashSale struct {
 	Currency    FlashSaleCurrency  `json:"currency"`
@@ -236,6 +275,16 @@ type Store struct {
 	Name string             `json:"name"`
 }
 
+// StoreBalance defines model for StoreBalance.
+type StoreBalance struct {
+	BalanceCents int64                `json:"balanceCents"`
+	Currency     StoreBalanceCurrency `json:"currency"`
+	StoreId      openapi_types.UUID   `json:"storeId"`
+}
+
+// StoreBalanceCurrency defines model for StoreBalance.Currency.
+type StoreBalanceCurrency string
+
 // ShopperId defines model for ShopperId.
 type ShopperId = openapi_types.UUID
 
@@ -265,9 +314,15 @@ type ServerInterface interface {
 	// Pay Pay for a HELD Hold with a test payment method, getting the Order back.
 	// (POST /flash-sales/{flashSaleId}/holds/{holdId}/pay)
 	Pay(w http.ResponseWriter, r *http.Request, flashSaleId openapi_types.UUID, holdId openapi_types.UUID, params PayParams)
+	// GetFeeRevenue The Platform's Fee revenue across every Order, from the ledger.
+	// (GET /platform/fee-revenue)
+	GetFeeRevenue(w http.ResponseWriter, r *http.Request)
 	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
 	// (POST /sign-in)
 	SignIn(w http.ResponseWriter, r *http.Request)
+	// GetStoreBalance What the Platform owes a Store after the Platform's Fee, from the ledger.
+	// (GET /stores/{storeId}/balance)
+	GetStoreBalance(w http.ResponseWriter, r *http.Request, storeId openapi_types.UUID)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -410,11 +465,51 @@ func (siw *ServerInterfaceWrapper) Pay(w http.ResponseWriter, r *http.Request) {
 	handler.ServeHTTP(w, r)
 }
 
+// GetFeeRevenue operation middleware
+func (siw *ServerInterfaceWrapper) GetFeeRevenue(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetFeeRevenue(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SignIn operation middleware
 func (siw *ServerInterfaceWrapper) SignIn(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetStoreBalance operation middleware
+func (siw *ServerInterfaceWrapper) GetStoreBalance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "storeId" -------------
+	var storeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storeId", r.PathValue("storeId"), &storeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storeId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetStoreBalance(w, r, storeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -548,6 +643,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/sign-in", wrapper.SignIn)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/flash-sales/{flashSaleId}/holds", wrapper.Reserve)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/flash-sales/{flashSaleId}/holds/{holdId}/pay", wrapper.Pay)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/stores/{storeId}/balance", wrapper.GetStoreBalance)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/platform/fee-revenue", wrapper.GetFeeRevenue)
 
 	return m
 }
@@ -667,6 +764,27 @@ func (response Pay409JSONResponse) VisitPayResponse(w http.ResponseWriter) error
 	return err
 }
 
+type GetFeeRevenueRequestObject struct {
+}
+
+type GetFeeRevenueResponseObject interface {
+	VisitGetFeeRevenueResponse(w http.ResponseWriter) error
+}
+
+type GetFeeRevenue200JSONResponse FeeRevenue
+
+func (response GetFeeRevenue200JSONResponse) VisitGetFeeRevenueResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SignInRequestObject struct {
 }
 
@@ -690,6 +808,28 @@ func (response SignIn200JSONResponse) VisitSignInResponse(w http.ResponseWriter)
 	return err
 }
 
+type GetStoreBalanceRequestObject struct {
+	StoreId openapi_types.UUID `json:"storeId"`
+}
+
+type GetStoreBalanceResponseObject interface {
+	VisitGetStoreBalanceResponse(w http.ResponseWriter) error
+}
+
+type GetStoreBalance200JSONResponse StoreBalance
+
+func (response GetStoreBalance200JSONResponse) VisitGetStoreBalanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// ListFlashSales List Flash Sales across all Stores, soonest start first.
@@ -701,9 +841,15 @@ type StrictServerInterface interface {
 	// Pay Pay for a HELD Hold with a test payment method, getting the Order back.
 	// (POST /flash-sales/{flashSaleId}/holds/{holdId}/pay)
 	Pay(ctx context.Context, request PayRequestObject) (PayResponseObject, error)
+	// GetFeeRevenue The Platform's Fee revenue across every Order, from the ledger.
+	// (GET /platform/fee-revenue)
+	GetFeeRevenue(ctx context.Context, request GetFeeRevenueRequestObject) (GetFeeRevenueResponseObject, error)
 	// SignIn Stub sign-in, no password. Issues a new Platform-wide Shopper ID.
 	// (POST /sign-in)
 	SignIn(ctx context.Context, request SignInRequestObject) (SignInResponseObject, error)
+	// GetStoreBalance What the Platform owes a Store after the Platform's Fee, from the ledger.
+	// (GET /stores/{storeId}/balance)
+	GetStoreBalance(ctx context.Context, request GetStoreBalanceRequestObject) (GetStoreBalanceResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -831,6 +977,30 @@ func (sh *strictHandler) Pay(w http.ResponseWriter, r *http.Request, flashSaleId
 	}
 }
 
+// GetFeeRevenue operation middleware
+func (sh *strictHandler) GetFeeRevenue(w http.ResponseWriter, r *http.Request) {
+	var request GetFeeRevenueRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetFeeRevenue(ctx, request.(GetFeeRevenueRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetFeeRevenue")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetFeeRevenueResponseObject); ok {
+		if err := validResponse.VisitGetFeeRevenueResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // SignIn operation middleware
 func (sh *strictHandler) SignIn(w http.ResponseWriter, r *http.Request) {
 	var request SignInRequestObject
@@ -848,6 +1018,32 @@ func (sh *strictHandler) SignIn(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SignInResponseObject); ok {
 		if err := validResponse.VisitSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetStoreBalance operation middleware
+func (sh *strictHandler) GetStoreBalance(w http.ResponseWriter, r *http.Request, storeId openapi_types.UUID) {
+	var request GetStoreBalanceRequestObject
+
+	request.StoreId = storeId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetStoreBalance(ctx, request.(GetStoreBalanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetStoreBalance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetStoreBalanceResponseObject); ok {
+		if err := validResponse.VisitGetStoreBalanceResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

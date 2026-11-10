@@ -78,6 +78,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stores/{storeId}/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the Platform owes a Store after the Platform's Fee, from the ledger. */
+        get: operations["getStoreBalance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/fee-revenue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The Platform's Fee revenue across every Order, from the ledger. */
+        get: operations["getFeeRevenue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -170,6 +204,20 @@ export interface components {
             currency: "USD";
             /** Format: date-time */
             createdAt: string;
+        };
+        StoreBalance: {
+            /** Format: uuid */
+            storeId: string;
+            /** Format: int64 */
+            balanceCents: number;
+            /** @enum {string} */
+            currency: "USD";
+        };
+        FeeRevenue: {
+            /** Format: int64 */
+            feeRevenueCents: number;
+            /** @enum {string} */
+            currency: "USD";
         };
     };
     responses: never;
@@ -312,6 +360,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PayRefusal"];
+                };
+            };
+        };
+    };
+    getStoreBalance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                storeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Store's balance, computed from its Postings. A Store with no Orders has 0. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoreBalance"];
+                };
+            };
+        };
+    };
+    getFeeRevenue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Platform's Fee revenue, computed from its Postings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeeRevenue"];
                 };
             };
         };

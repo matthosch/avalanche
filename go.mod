@@ -11,6 +11,7 @@ require (
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/stripe/stripe-go/v87 v87.1.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.45.0
 )
 

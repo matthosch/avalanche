@@ -8,43 +8,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/lock"
 
 	"github.com/matthosch/avalanche/internal/events"
+	"github.com/matthosch/avalanche/internal/migrate"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
 // Migrate brings the commerce schema up to date. It is safe to call from several processes at
-// once (api and worker both migrate at startup): a Postgres advisory lock lets one apply the
-// migrations while the others wait, then find nothing left to do.
+// once (api and worker both migrate at startup).
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
-	// Poll for the lock every second, for up to a minute, rather than goose's 5 s default, so a
-	// process that loses the race starts about as soon as the winner has finished.
-	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 60))
-	if err != nil {
-		return fmt.Errorf("commerce migrations lock: %w", err)
-	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, migrationsDir(), goose.WithSessionLocker(locker))
-	if err != nil {
-		return fmt.Errorf("commerce migrations: %w", err)
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("commerce migrate up: %w", err)
-	}
-	return nil
+	return migrate.Up(ctx, pool, "commerce", migrate.Sub(migrations, "migrations"))
 }
 
 // Status is where a Flash Sale is in its lifecycle: SCHEDULED → LIVE → ENDED → CLOSED.
@@ -236,12 +217,56 @@ func RecordOrder(ctx context.Context, pool *pgxpool.Pool, o NewOrder) (Order, er
 	return order, nil
 }
 
-func migrationsDir() fs.FS {
-	dir, err := fs.Sub(migrations, "migrations")
+// OutboxEvent is an event waiting in the outbox to be published.
+type OutboxEvent struct {
+	ID        uuid.UUID
+	EventType string
+	Payload   []byte
+}
+
+// PublishOutbox claims up to limit unpublished outbox rows, oldest first, hands each to
+// publish, and marks the ones it published. It returns how many it published.
+//
+// Rows are claimed with FOR UPDATE SKIP LOCKED, so several relays never publish the same row
+// at once (ADR-0003). It stops at the first failed publish, keeping what was published before
+// it. A row published but not marked, if the commit fails, is published again later: delivery
+// is at-least-once, and consumers keep only the first copy of each event_id.
+func PublishOutbox(ctx context.Context, pool *pgxpool.Pool, limit int, publish func(context.Context, OutboxEvent) error) (int, error) {
+	var published []uuid.UUID
+	var publishErr error
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, event_type, payload FROM outbox
+			WHERE published_at IS NULL
+			ORDER BY created_at, id
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED`, limit)
+		if err != nil {
+			return err
+		}
+		claimed, err := pgx.CollectRows(rows, pgx.RowToStructByPos[OutboxEvent])
+		if err != nil {
+			return err
+		}
+		for _, event := range claimed {
+			if publishErr = publish(ctx, event); publishErr != nil {
+				break
+			}
+			published = append(published, event.ID)
+		}
+		if len(published) == 0 {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `UPDATE outbox SET published_at = now() WHERE id = ANY($1)`, published)
+		return err
+	})
 	if err != nil {
-		panic(err) // the embed path is fixed at compile time
+		return 0, fmt.Errorf("publish outbox: %w", err)
 	}
-	return dir
+	if publishErr != nil {
+		return len(published), fmt.Errorf("publish outbox: %w", publishErr)
+	}
+	return len(published), nil
 }
 
 // Querier is satisfied by *pgxpool.Pool and pgx.Tx.

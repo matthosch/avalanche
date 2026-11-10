@@ -1,5 +1,5 @@
-// Command worker runs the background jobs: for now, moving Flash Sales through their
-// lifecycle at their start and end times.
+// Command worker runs the background jobs: moving Flash Sales through their lifecycle at
+// their start and end times, and relaying the commerce outbox to its stream.
 package main
 
 import (
@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,11 +18,16 @@ import (
 	"github.com/matthosch/avalanche/internal/config"
 	"github.com/matthosch/avalanche/internal/inventory"
 	"github.com/matthosch/avalanche/internal/lifecycle"
+	"github.com/matthosch/avalanche/internal/relay"
 )
 
 // lifecycleTick is how often Flash Sales are checked against their start and end times, so
 // a Flash Sale goes LIVE or ENDED at most this long after its time.
 const lifecycleTick = time.Second
+
+// relayTick is how long the relay waits once the outbox is empty, so an Order reaches the
+// stream within about this long of being written.
+const relayTick = 200 * time.Millisecond
 
 func main() {
 	if err := run(); err != nil {
@@ -50,7 +56,10 @@ func run() error {
 	rdb := redis.NewClient(opts)
 	defer rdb.Close()
 
-	slog.Info("worker running", "lifecycle_tick", lifecycleTick)
-	lifecycle.Run(ctx, pool, inventory.New(rdb), lifecycleTick)
+	slog.Info("worker running", "lifecycle_tick", lifecycleTick, "relay_tick", relayTick)
+	var wg sync.WaitGroup
+	wg.Go(func() { lifecycle.Run(ctx, pool, inventory.New(rdb), lifecycleTick) })
+	wg.Go(func() { relay.Run(ctx, pool, rdb, relayTick) })
+	wg.Wait()
 	return nil
 }
