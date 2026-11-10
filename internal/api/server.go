@@ -14,6 +14,7 @@ import (
 	"github.com/matthosch/avalanche/internal/checkout"
 	"github.com/matthosch/avalanche/internal/commerce"
 	"github.com/matthosch/avalanche/internal/inventory"
+	"github.com/matthosch/avalanche/internal/ledger"
 )
 
 // BaseURL is where the API is mounted; it matches the contract's server URL.
@@ -23,11 +24,13 @@ type server struct {
 	commerce  *pgxpool.Pool
 	inventory *inventory.Inventory
 	checkout  *checkout.Checkout
+	ledger    *ledger.Client
 }
 
-// NewHandler returns the HTTP handler for the whole API.
-func NewHandler(commerceDB *pgxpool.Pool, inv *inventory.Inventory, checkout *checkout.Checkout) http.Handler {
-	strict := gen.NewStrictHandlerWithOptions(&server{commerce: commerceDB, inventory: inv, checkout: checkout}, nil,
+// NewHandler returns the HTTP handler for the whole API. Balances are read from the ledger
+// through ledgerClient; the browser never calls the ledger itself.
+func NewHandler(commerceDB *pgxpool.Pool, inv *inventory.Inventory, checkout *checkout.Checkout, ledgerClient *ledger.Client) http.Handler {
+	strict := gen.NewStrictHandlerWithOptions(&server{commerce: commerceDB, inventory: inv, checkout: checkout, ledger: ledgerClient}, nil,
 		gen.StrictHTTPServerOptions{ResponseErrorHandlerFunc: internalError})
 	return gen.HandlerWithOptions(strict, gen.StdHTTPServerOptions{BaseURL: BaseURL})
 }
@@ -157,5 +160,30 @@ func (s *server) Pay(ctx context.Context, request gen.PayRequestObject) (gen.Pay
 		AmountCents: order.AmountCents,
 		Currency:    gen.OrderCurrency(order.Currency),
 		CreatedAt:   order.CreatedAt.UTC(),
+	}, nil
+}
+
+// GetStoreBalance is what the Platform owes a Store, as the ledger computes it from Postings.
+func (s *server) GetStoreBalance(ctx context.Context, request gen.GetStoreBalanceRequestObject) (gen.GetStoreBalanceResponseObject, error) {
+	balance, err := s.ledger.StoreBalance(ctx, request.StoreId)
+	if err != nil {
+		return nil, err
+	}
+	return gen.GetStoreBalance200JSONResponse{
+		StoreId:      balance.StoreID,
+		BalanceCents: balance.BalanceCents,
+		Currency:     gen.StoreBalanceCurrency(balance.Currency),
+	}, nil
+}
+
+// GetFeeRevenue is the Platform's Fee revenue, as the ledger computes it from Postings.
+func (s *server) GetFeeRevenue(ctx context.Context, _ gen.GetFeeRevenueRequestObject) (gen.GetFeeRevenueResponseObject, error) {
+	revenue, err := s.ledger.FeeRevenue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return gen.GetFeeRevenue200JSONResponse{
+		FeeRevenueCents: revenue.FeeRevenueCents,
+		Currency:        gen.FeeRevenueCurrency(revenue.Currency),
 	}, nil
 }

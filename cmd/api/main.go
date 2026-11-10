@@ -19,6 +19,7 @@ import (
 	"github.com/matthosch/avalanche/internal/commerce"
 	"github.com/matthosch/avalanche/internal/config"
 	"github.com/matthosch/avalanche/internal/inventory"
+	"github.com/matthosch/avalanche/internal/ledger"
 	"github.com/matthosch/avalanche/internal/payments"
 )
 
@@ -57,7 +58,7 @@ func run() error {
 	checkouts := checkout.New(pool, inv, payments.NewStripeClient(config.PaymentsURL(), config.PaymentsSecretKey()), feeBPS)
 
 	addr := config.Env("API_ADDR", ":8080")
-	srv := &http.Server{Addr: addr, Handler: api.NewHandler(pool, inv, checkouts), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: api.NewHandler(pool, inv, checkouts, ledger.NewClient(config.LedgerURL())), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
