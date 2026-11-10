@@ -62,5 +62,3 @@ task typecheck
 ## Status
 
 Built: the Flash Sale list, Flash Sales going LIVE and ENDED on schedule, reserve, pay, and Order → Journal Entry → Store balance. On the way, tracked in [issues](https://github.com/matthosch/avalanche/issues): Hold expiry, the 100k-request flood test with an invariant checker, checkout idempotency keys, hostile payment webhooks, provider timeouts, a ledger outage drill, telemetry and SLOs, live dashboards, and a chaos runner that injects each fault and prints a pass/fail table.
-
-The animations above are generated from code, not recorded: `task readme:gifs` redraws them ([`tools/readme-gifs`](tools/readme-gifs)).
